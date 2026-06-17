@@ -216,7 +216,7 @@ class QueuesBusEventHandler(object):
                             }
                         }
                     )
-        logger.info("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
+        logger.debug("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
         return agents[tenant_uuid]
 
     def add_agent(self, tenant_uuid, agent, member):

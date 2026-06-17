@@ -43,8 +43,29 @@ def _published_events(handler):
     return [call.args[0] for call in handler.bus_publisher.publish.call_args_list]
 
 
+@pytest.fixture
+def frozen_now(monkeypatch):
+    """Freeze ``bus_consume.datetime.now()`` so day-based assertions are stable.
+
+    ``get_stats`` keys its daily reset on ``datetime.datetime.now().day``;
+    without freezing, a test running across midnight could read two different
+    days between the code under test and the assertion.
+    """
+    fixed = datetime.datetime(2026, 6, 17, 12, 0, 0)
+
+    class _FrozenDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(
+        bus_consume, "datetime", SimpleNamespace(datetime=_FrozenDateTime)
+    )
+    return fixed
+
+
 class TestGetStats:
-    def test_creates_default_entry(self, handler):
+    def test_creates_default_entry(self, handler, frozen_now):
         result = handler.get_stats("support")
 
         assert result["count"] == 0
@@ -54,7 +75,7 @@ class TestGetStats:
         assert result["answered"] == 0
         assert result["awr"] == 0
         assert result["waiting_calls"] == []
-        assert result["updated_at"] == datetime.datetime.now().day
+        assert result["updated_at"] == frozen_now.day
         assert bus_consume.stats["support"] is result
 
     def test_returns_existing_entry_same_day(self, handler):
@@ -66,7 +87,7 @@ class TestGetStats:
         assert second is first
         assert second["count"] == 5
 
-    def test_resets_entry_on_a_new_day(self, handler):
+    def test_resets_entry_on_a_new_day(self, handler, frozen_now):
         stats = handler.get_stats("support")
         stats["count"] = 42
         stats["received"] = 7
@@ -76,7 +97,7 @@ class TestGetStats:
 
         assert result["count"] == 0
         assert result["received"] == 0
-        assert result["updated_at"] == datetime.datetime.now().day
+        assert result["updated_at"] == frozen_now.day
 
 
 class TestLiveStats:
