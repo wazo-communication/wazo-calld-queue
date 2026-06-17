@@ -14,6 +14,3 @@ class ArbitraryEvent:
             and self._body == other._body
             and self.required_acl == other.required_acl
         )
-
-    def __ne__(self, other):
-        return self != other
