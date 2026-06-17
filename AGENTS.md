@@ -38,8 +38,10 @@ Version source: `wazo/plugin.yml`.
 
 - Install dev deps: `pip install -r requirements-test.txt`.
 - Run: `pytest tests/` from the repository root.
-- `bus_consume` is covered; the rest of the package (resources, services) is not yet.
+- Covered: `bus_consume` and `services`. `resources.py` is thin framework glue
+  (Flask + `wazo_calld`); it belongs to integration tests against a live
+  `wazo-calld`, not unit tests.
 
 ## Known technical debt
 
-- Test coverage is limited to `bus_consume.py`.
+- `resources.py` has no unit coverage (integration-level by nature); `schema.py` is untested.
