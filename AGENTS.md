@@ -47,5 +47,3 @@ Version source: `wazo/plugin.yml`.
 ## Known technical debt
 
 - `resources.py` has no unit coverage (integration-level by nature).
-- `schema.py` uses `missing=dict` (marshmallow), deprecated in 3.x and removed
-  in 4.x; migrate to `load_default` before any marshmallow 4 upgrade.
