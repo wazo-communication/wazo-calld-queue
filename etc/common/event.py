@@ -9,8 +9,11 @@ class ArbitraryEvent:
         return self._body
 
     def __eq__(self, other):
+        if not isinstance(other, ArbitraryEvent):
+            return NotImplemented
         return (
             self.name == other.name
             and self._body == other._body
-            and self.required_acl == other.required_acl
+            and getattr(self, "required_acl", None)
+            == getattr(other, "required_acl", None)
         )
