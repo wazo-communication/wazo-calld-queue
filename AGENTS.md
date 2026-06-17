@@ -9,7 +9,7 @@ Version source: `wazo/plugin.yml`.
 - `wazo_calld_queue/`: `wazo-calld` plugin. Exposes REST API `/queues/*` and bus event bridge.
 - `wazo_call_logd_queue/`: `wazo-call-logd` plugin. Persists Asterisk `queue_log` entries to the database and publishes bus events.
 - `etc/`: deployed configuration, including Asterisk dialplan, ACL, and plugin activation.
-- `tests/`: empty. No test coverage.
+- `tests/`: pytest unit tests. `conftest.py` stubs `wazo_bus` so `bus_consume` imports without the full Wazo stack.
 
 ## Core module map (`wazo_calld_queue/`)
 
@@ -34,6 +34,12 @@ Version source: `wazo/plugin.yml`.
 - Use conventional commits: `feat:`, `fix:`, `chore:`, etc.
 - Keep the version number in `wazo/plugin.yml`.
 
+## Testing
+
+- Install dev deps: `pip install -r requirements-test.txt`.
+- Run: `pytest tests/` from the repository root.
+- `bus_consume` is covered; the rest of the package (resources, services) is not yet.
+
 ## Known technical debt
 
-- No tests exist.
+- Test coverage is limited to `bus_consume.py`.
