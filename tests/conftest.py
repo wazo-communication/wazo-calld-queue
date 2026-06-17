@@ -52,7 +52,44 @@ def _install_wazo_bus_stub():
     sys.modules["wazo_bus.resources.common.event"] = event_mod
 
 
+def _install_wazo_calld_stub():
+    """Stub ``wazo_calld.plugin_helpers.mallow.StrictDict`` used by ``schema``.
+
+    The real ``StrictDict`` is a marshmallow field validating dict entries; for
+    unit tests a pass-through field accepting the same constructor kwargs is
+    enough to import and exercise the schemas.
+    """
+    if "wazo_calld" in sys.modules:
+        return
+
+    from marshmallow import fields
+
+    class StrictDict(fields.Field):
+        def __init__(self, key_field=None, value_field=None, *args, **kwargs):
+            self.key_field = key_field
+            self.value_field = value_field
+            super().__init__(*args, **kwargs)
+
+        def _serialize(self, value, attr, obj, **kwargs):
+            return value
+
+        def _deserialize(self, value, attr, data, **kwargs):
+            return value
+
+    mallow_mod = types.ModuleType("wazo_calld.plugin_helpers.mallow")
+    mallow_mod.StrictDict = StrictDict
+    plugin_helpers_mod = types.ModuleType("wazo_calld.plugin_helpers")
+    plugin_helpers_mod.mallow = mallow_mod
+    wazo_calld_mod = types.ModuleType("wazo_calld")
+    wazo_calld_mod.plugin_helpers = plugin_helpers_mod
+
+    sys.modules["wazo_calld"] = wazo_calld_mod
+    sys.modules["wazo_calld.plugin_helpers"] = plugin_helpers_mod
+    sys.modules["wazo_calld.plugin_helpers.mallow"] = mallow_mod
+
+
 _install_wazo_bus_stub()
+_install_wazo_calld_stub()
 
 # Imported only after the stub is in place.
 from wazo_calld_queue import bus_consume  # noqa: E402

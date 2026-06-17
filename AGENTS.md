@@ -38,10 +38,14 @@ Version source: `wazo/plugin.yml`.
 
 - Install dev deps: `pip install -r requirements-test.txt`.
 - Run: `pytest tests/` from the repository root.
-- Covered: `bus_consume` and `services`. `resources.py` is thin framework glue
-  (Flask + `wazo_calld`); it belongs to integration tests against a live
+- Covered: `bus_consume`, `services`, `schema`. `resources.py` is thin framework
+  glue (Flask + `wazo_calld`); it belongs to integration tests against a live
   `wazo-calld`, not unit tests.
+- `conftest.py` also stubs `wazo_calld.plugin_helpers.mallow.StrictDict` so
+  `schema` imports without the full Wazo stack.
 
 ## Known technical debt
 
-- `resources.py` has no unit coverage (integration-level by nature); `schema.py` is untested.
+- `resources.py` has no unit coverage (integration-level by nature).
+- `schema.py` uses `missing=dict` (marshmallow), deprecated in 3.x and removed
+  in 4.x; migrate to `load_default` before any marshmallow 4 upgrade.

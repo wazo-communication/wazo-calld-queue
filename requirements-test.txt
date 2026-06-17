@@ -1,1 +1,2 @@
 pytest
+marshmallow>=3,<4
