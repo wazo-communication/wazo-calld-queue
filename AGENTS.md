@@ -36,6 +36,5 @@ Version source: `wazo/plugin.yml`.
 
 ## Known technical debt
 
-- `agent.py` (`AgentStatusHandler`) and `queue.py` (`QueueStatusHandler`) are OO refactors of `bus_consume.py` logic. They are not wired up and are imported nowhere.
-- Debug `print()` calls remain in `bus_consume.py:219` and `agent.py:20`.
+- Debug `print()` call remains in `bus_consume.py:219`.
 - No tests exist.
