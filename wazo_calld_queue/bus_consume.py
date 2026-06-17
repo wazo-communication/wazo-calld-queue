@@ -216,7 +216,7 @@ class QueuesBusEventHandler(object):
                             }
                         }
                     )
-        print(agents[tenant_uuid])
+        logger.info("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
         return agents[tenant_uuid]
 
     def add_agent(self, tenant_uuid, agent, member):
@@ -253,8 +253,6 @@ class QueuesBusEventHandler(object):
                     }
                 }
             )
-        # print(agents[tenant_uuid].get(agent))
-        # print(agents[tenant_uuid])
 
     def get_stats(self, name):
         # If the queue stats doesnot exist, create the object with default values || Reset if day is different

@@ -36,5 +36,4 @@ Version source: `wazo/plugin.yml`.
 
 ## Known technical debt
 
-- Debug `print()` call remains in `bus_consume.py:219`.
 - No tests exist.
