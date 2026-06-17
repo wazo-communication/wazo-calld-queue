@@ -1,40 +1,41 @@
 # AGENTS.md
 
-Plugin Wazo (PBX basé sur Asterisk) ajoutant la gestion des files d'attente et la
-diffusion temps réel de leur état. GPL-3.0+. Version dans `wazo/plugin.yml`.
+Purpose: Wazo plugin for Asterisk-based PBX queue management and real-time queue state broadcasting.
+License: GPL-3.0+.
+Version source: `wazo/plugin.yml`.
 
-## Structure
+## Repository layout
 
-Un seul paquet, deux plugins déclarés dans `setup.py` (entry points) :
+- `wazo_calld_queue/`: `wazo-calld` plugin. Exposes REST API `/queues/*` and bus event bridge.
+- `wazo_call_logd_queue/`: `wazo-call-logd` plugin. Persists Asterisk `queue_log` entries to the database and publishes bus events.
+- `etc/`: deployed configuration, including Asterisk dialplan, ACL, and plugin activation.
+- `tests/`: empty. No test coverage.
 
-- `wazo_calld_queue/` — plugin `wazo-calld` : API REST `/queues/*` + pont d'événements bus.
-- `wazo_call_logd_queue/` — plugin `wazo-call-logd` : persistance des `queue_log` Asterisk en base + publication bus.
-- `etc/` — configuration déployée (dialplan Asterisk, ACL, activation des plugins).
-- `tests/` — vide (aucune couverture).
+## Core module map (`wazo_calld_queue/`)
 
-### `wazo_calld_queue/` (cœur)
+- `plugin.py`: entry point. Instantiate clients (`amid`, `confd`, `agentd`, `ari`), register resources, subscribe the event handler.
+- `resources.py`: REST endpoints. Use `AuthResource` and ACL `required_acl`.
+- `services.py`: `QueueService`. Use AMI actions: `queuesummary`, `status`, `add`, `remove`, `pause`, `withdrawcaller`.
+- `bus_consume.py`: `QueuesBusEventHandler`. Consume Asterisk events, update state, republish to the bus. Multi-tenant.
+- `events.py` / `schema.py`: bus events (`TenantEvent`) and marshmallow schemas.
 
-- `plugin.py` — point d'entrée : instancie les clients (amid, confd, agentd, ari), enregistre les resources et abonne le handler d'événements.
-- `resources.py` — endpoints REST (`AuthResource`, ACL `required_acl`).
-- `services.py` — `QueueService` : actions AMI (queuesummary/status/add/remove/pause/withdrawcaller).
-- `bus_consume.py` — `QueuesBusEventHandler` : s'abonne aux événements Asterisk, met à jour l'état, republie sur le bus (multi-tenant).
-- `events.py` / `schema.py` — événements bus (`TenantEvent`) et schémas marshmallow.
+## Behavior to preserve
 
-## Fonctionnement clé
-
-- **API → AMI** : les endpoints REST traduisent les requêtes en actions Asterisk Manager Interface.
-- **Bus → état → bus** : `bus_consume.py` consomme les événements `QueueCaller*`/`QueueMember*`, maintient deux dicts globaux en mémoire (`stats`, `agents`) et republie des événements enrichis pour le websocket front.
-- **État global en mémoire** : `stats` et `agents` ne sont pas partagés entre workers et sont perdus au redémarrage (par design, temps réel).
-- **Multi-tenant** : `_extract_tenant_uuid` lit `WAZO_TENANT_UUID` ou résout via confd.
+- Map REST API calls to Asterisk Manager Interface actions.
+- Consume `QueueCaller*` and `QueueMember*` bus events in `bus_consume.py`.
+- Maintain global in-memory dicts: `stats` and `agents`.
+- Republish enriched events to the front-end websocket.
+- Treat in-memory state as non-shared across workers and non-persistent across restarts.
+- Resolve tenant UUID from `WAZO_TENANT_UUID` or confd via `_extract_tenant_uuid`.
 
 ## Conventions
 
-- Python, en-tête de copyright Wazo + `SPDX-License-Identifier: GPL-3.0+` en tête de fichier.
-- Commits conventionnels (`feat:`, `fix:`, `chore:`, ...).
-- Le numéro de version vit dans `wazo/plugin.yml` (lu par `setup.py`).
+- Keep the Python copyright header and `SPDX-License-Identifier: GPL-3.0+` at the top of each file.
+- Use conventional commits: `feat:`, `fix:`, `chore:`, etc.
+- Keep the version number in `wazo/plugin.yml`.
 
-## Dette technique connue
+## Known technical debt
 
-- `agent.py` (`AgentStatusHandler`) et `queue.py` (`QueueStatusHandler`) : refactoring OO de la logique de `bus_consume.py`, **non branchés** (importés nulle part).
-- `print()` de debug laissés en place : `bus_consume.py:219`, `agent.py:20`.
-- Aucun test.
+- `agent.py` (`AgentStatusHandler`) and `queue.py` (`QueueStatusHandler`) are OO refactors of `bus_consume.py` logic. They are not wired up and are imported nowhere.
+- Debug `print()` calls remain in `bus_consume.py:219` and `agent.py:20`.
+- No tests exist.
