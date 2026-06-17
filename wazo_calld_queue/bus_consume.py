@@ -402,9 +402,11 @@ class QueuesBusEventHandler(object):
                 stats[name]["awr"] = math.ceil(
                     stats[name]["answered"] / stats[name]["received"] * 100
                 )
-            for i in range(len(stats[name]["waiting_calls"])):
-                if stats[name]["waiting_calls"][i]["uniqueid"] == event["Uniqueid"]:
-                    stats[name]["waiting_calls"].pop(i)
+            stats[name]["waiting_calls"] = [
+                call
+                for call in stats[name]["waiting_calls"]
+                if call["uniqueid"] != event["Uniqueid"]
+            ]
         elif queue_event == "QueueCallerLeave":
             stats[name]["count"] = int(event["Count"])
             stats[name]["updated_at"] = datetime.datetime.now().day
@@ -414,9 +416,11 @@ class QueuesBusEventHandler(object):
                 stats[name]["awr"] = math.ceil(
                     stats[name]["answered"] / stats[name]["received"] * 100
                 )
-            for i in range(len(stats[name]["waiting_calls"])):
-                if stats[name]["waiting_calls"][i]["uniqueid"] == event["Uniqueid"]:
-                    stats[name]["waiting_calls"].pop(i)
+            stats[name]["waiting_calls"] = [
+                call
+                for call in stats[name]["waiting_calls"]
+                if call["uniqueid"] != event["Uniqueid"]
+            ]
 
         # Set color depending on limit value
         stats[name]["count_color"] = "green"
