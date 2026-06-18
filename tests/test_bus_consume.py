@@ -675,6 +675,60 @@ class TestMultiQueueMembership:
         assert agent["is_paused"] is False
 
 
+class TestBootstrapTimestamps:
+    """A REST/restart bootstrap seeds membership but no session timestamps.
+
+    ``get_agents_status`` materialises an already-logged-in (or already-paused)
+    agent with non-empty ``queues`` / ``paused_queues`` but empty ``logged_at``
+    / ``paused_at`` (the real login/pause time is unknown). The first live
+    membership event that arrives afterwards must backfill the missing
+    timestamp instead of treating the agent as "already logged/paused" and
+    leaving the field empty forever.
+    """
+
+    def _bootstrapped_agent(self, queues, paused_queues=None):
+        bus_consume.agents[TENANT] = {
+            5: {
+                "id": 5,
+                "number": "1001",
+                "fullname": "John Doe",
+                "queue": queues[0] if queues else False,
+                "queues": list(queues),
+                "paused_queues": list(paused_queues or []),
+                "is_logged": bool(queues),
+                "is_paused": bool(paused_queues),
+                "is_offline": False,
+                "is_talking": False,
+                "is_ringing": False,
+                # Seeded without timestamps: the real times are unknown.
+                "logged_at": "",
+                "paused_at": "",
+                "talked_at": "",
+                "talked_with_number": "",
+                "talked_with_name": "",
+            }
+        }
+        return bus_consume.agents[TENANT][5]
+
+    def test_member_added_backfills_logged_at_after_bootstrap(self, handler, frozen_now):
+        self._bootstrapped_agent(["support"])
+
+        handler._queue_member_added(_member_added_event("support"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == ["support"]
+        assert agent["logged_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+    def test_member_pause_backfills_paused_at_after_bootstrap(self, handler, frozen_now):
+        self._bootstrapped_agent(["support"], paused_queues=["support"])
+
+        handler._queue_member_pause(_member_pause_event("support", paused="1"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["paused_queues"] == ["support"]
+        assert agent["paused_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
 class TestBuildAgentState:
     def test_seeds_runtime_queues_when_logged(self):
         state = bus_consume._build_agent_state(

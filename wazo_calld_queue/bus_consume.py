@@ -379,12 +379,14 @@ class QueuesBusEventHandler(object):
             # Handle connection to a queue (an agent may serve several queues)
             state = agents[tenant_uuid][agent]
             state.setdefault("queues", [])
-            was_logged = bool(state["queues"])
             if event["Queue"] not in state["queues"]:
                 state["queues"].append(event["Queue"])
             state["interface"] = event["StateInterface"]
-            if not was_logged:
-                # LoginTime: set on first queue join, kept across further joins
+            if not state.get("logged_at"):
+                # LoginTime: set on first observed queue join, kept across
+                # further joins. Keying on the empty timestamp (rather than on
+                # prior membership) also backfills it after a REST/restart
+                # bootstrap, which seeds ``queues`` but no ``logged_at``.
                 state["logged_at"] = datetime.datetime.now().strftime(
                     "%Y-%m-%dT%H:%M:%S.%f"
                 )
@@ -417,7 +419,6 @@ class QueuesBusEventHandler(object):
             state = agents[tenant_uuid][agent]
             state.setdefault("queues", [])
             state.setdefault("paused_queues", [])
-            was_paused = bool(state["paused_queues"])
             if event["Paused"] == "1":
                 # Keep the invariant paused_queues ⊆ queues: never report an
                 # agent as paused in a queue it is not a (runtime) member of.
@@ -435,8 +436,11 @@ class QueuesBusEventHandler(object):
                 else:
                     if event["Queue"] not in state["paused_queues"]:
                         state["paused_queues"].append(event["Queue"])
-                    if not was_paused:
-                        # LastPause: set on first pause, kept while any queue paused
+                    if not state.get("paused_at"):
+                        # LastPause: set on first observed pause, kept while any
+                        # queue is paused. Keying on the empty timestamp also
+                        # backfills it after a bootstrap that seeds
+                        # ``paused_queues`` but no ``paused_at``.
                         state["paused_at"] = datetime.datetime.now().strftime(
                             "%Y-%m-%dT%H:%M:%S.%f"
                         )
