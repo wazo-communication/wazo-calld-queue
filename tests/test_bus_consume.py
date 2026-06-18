@@ -313,7 +313,9 @@ class TestGetAgentsStatus:
         result = handler.get_agents_status(TENANT)
 
         assert result[1]["queues"] == []
-        assert result[1]["queue"] is False
+        # Legacy ``queue`` stays a queue-name string for back-compat; use
+        # ``is_logged`` / ``queues`` for connection state.
+        assert result[1]["queue"] == "support"
         assert result[1]["is_logged"] is False
         assert result[1]["paused_queues"] == []
 
@@ -363,9 +365,10 @@ class TestAddAgent:
         assert agent["id"] == 5
         assert agent["number"] == "1001"
         assert agent["fullname"] == "John Doe"
-        # add_agent starts not-yet-logged: the triggering membership event
-        # populates ``queues`` (and hence the derived ``queue``) right after.
-        assert agent["queue"] is False
+        # add_agent starts not-yet-logged (empty runtime ``queues``) but seeds
+        # the legacy ``queue`` string from the configured queues for back-compat.
+        assert agent["queue"] == "support"
+        assert agent["queues"] == []
         assert agent["is_logged"] is False
 
     def test_initializes_multi_queue(self, handler):
@@ -379,10 +382,10 @@ class TestAddAgent:
         handler.add_agent(TENANT, 5, "1001")
 
         agent = bus_consume.agents[TENANT][5]
-        # add_agent seeds the configured queues but the agent is not yet
-        # runtime-logged, so derived membership starts empty.
+        # Not yet runtime-logged, so derived membership starts empty; the legacy
+        # ``queue`` string is seeded from the first configured queue.
         assert agent["queues"] == []
-        assert agent["queue"] is False
+        assert agent["queue"] == "support"
         assert agent["is_logged"] is False
         assert agent["paused_queues"] == []
 
@@ -588,8 +591,12 @@ class TestMultiQueueMembership:
         handler._queue_member_removed(_member_removed_event("support"))
         assert bus_consume.agents[TENANT][5]["queue"] == "sales"
 
+        # Fully logged out: ``queue`` keeps the last known name (back-compat,
+        # never reset to False); ``is_logged`` / ``queues`` convey the logout.
         handler._queue_member_removed(_member_removed_event("sales"))
-        assert bus_consume.agents[TENANT][5]["queue"] is False
+        assert bus_consume.agents[TENANT][5]["queue"] == "sales"
+        assert bus_consume.agents[TENANT][5]["is_logged"] is False
+        assert bus_consume.agents[TENANT][5]["queues"] == []
 
     def test_pause_in_one_queue_among_two_sets_paused(self, handler):
         self._logged_agent(["support", "sales"])
@@ -742,6 +749,46 @@ class TestBootstrapTimestamps:
         agent = bus_consume.agents[TENANT][5]
         assert agent["paused_queues"] == ["support"]
         assert agent["paused_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+class TestLegacyQueueFieldBackCompat:
+    """The legacy ``queue`` field must stay a queue-name string even when the
+    agent is logged out.
+
+    The pre-multi-queue front (v2.0.2) groups agents by ``agent.queue`` and
+    expects a string; a boolean ``false`` breaks it. Connection state is carried
+    by ``is_logged`` (and the new ``queues``), not by resetting ``queue``.
+    """
+
+    def test_logged_out_agent_keeps_a_queue_name_at_bootstrap(self, handler):
+        handler.confd.agents.list.return_value = {
+            "items": [
+                {"id": 1, "firstname": "John", "lastname": "Doe", "number": "1001"}
+            ]
+        }
+        handler.agentd.agents.get_agent_statuses.return_value = [
+            _agentd_status(1, [("support", False, False), ("sales", False, False)]),
+        ]
+
+        result = handler.get_agents_status(TENANT)
+
+        assert result[1]["queue"] == "support"  # truthy, back-compat
+        assert result[1]["is_logged"] is False
+        assert result[1]["queues"] == []
+
+    def test_queue_not_reset_to_false_on_full_logout(self, handler):
+        bus_consume.agents[TENANT] = {
+            5: bus_consume._build_agent_state(
+                5, "1001", "John Doe", ["support"], [], home_queue="support"
+            )
+        }
+
+        handler._queue_member_removed(_member_removed_event("support"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == []
+        assert agent["is_logged"] is False
+        assert agent["queue"] == "support"  # NOT False
 
 
 class TestBuildAgentState:

@@ -43,13 +43,24 @@ _REQUIRED_EVENT_FIELDS = {
 def _sync_derived(state):
     """Recompute fields derived from the queue membership sets.
 
-    ``queue`` / ``is_logged`` / ``is_paused`` are never written directly; they
-    always reflect ``queues`` (runtime membership) and ``paused_queues`` so an
-    agent serving several queues stays consistent.
+    ``is_logged`` / ``is_paused`` reflect ``queues`` (runtime membership) and
+    ``paused_queues`` so an agent serving several queues stays consistent.
+
+    ``queue`` is the legacy single-queue field kept for backward compatibility
+    with pre-multi-queue clients (v2.0.x), which group agents by ``agent.queue``
+    and expect a queue-name **string**. It tracks the first runtime queue while
+    logged in, but — unlike ``is_logged`` / ``queues`` — it is **never reset to
+    ``False`` on logout**: the last known (or seeded home) queue name is kept so
+    a logged-out agent still carries a string. Use ``is_logged`` / ``queues``,
+    not ``queue``, to determine connection state.
     """
     queues = state.setdefault("queues", [])
     paused_queues = state.setdefault("paused_queues", [])
-    state["queue"] = queues[0] if queues else False
+    if queues:
+        state["queue"] = queues[0]
+    elif not state.get("queue"):
+        state["queue"] = False
+    # else: keep the existing (last-known / home) queue name for back-compat.
     state["is_logged"] = bool(queues)
     state["is_paused"] = bool(paused_queues)
 
@@ -63,37 +74,57 @@ def _agent_fullname(info):
     return fullname
 
 
+def _queue_names(info):
+    """Return the confd-configured queue names for an agent, or ``[]``."""
+    try:
+        return [q.get("name") for q in info["queues"] if q.get("name")]
+    except (KeyError, TypeError):
+        return []
+
+
 def _membership_from_status(status):
-    """Derive runtime ``(queues, paused_queues)`` from a live agentd status.
+    """Derive ``(queues, paused_queues, all_queues)`` from a live agentd status.
 
     agentd reports every configured queue with its current per-queue
     ``logged`` / ``paused`` flags, so the runtime membership is exactly the
     queues flagged ``logged`` (resp. ``paused``) — not every configured queue.
     This keeps a multi-queue agent's bootstrap snapshot accurate instead of
     over-reporting membership until the next live event corrects it.
+
+    ``all_queues`` is every queue the agent is configured for (regardless of
+    login), used to seed the legacy ``queue`` field so a logged-out agent still
+    carries a queue-name string (see ``_sync_derived``).
     """
     queues = []
     paused_queues = []
+    all_queues = []
     for queue in getattr(status, "queues", None) or []:
         name = queue.get("name")
         if not name:
             continue
+        all_queues.append(name)
         if queue.get("logged"):
             queues.append(name)
         if queue.get("paused"):
             paused_queues.append(name)
-    return queues, paused_queues
+    return queues, paused_queues, all_queues
 
 
-def _build_agent_state(agent_id, number, fullname, queues=None, paused_queues=None):
+def _build_agent_state(
+    agent_id, number, fullname, queues=None, paused_queues=None, home_queue=False
+):
     """Build a fresh agent state dict.
 
     ``queues`` is the runtime membership (the queues the agent is currently
     logged into) and ``paused_queues`` the queues it is paused in — both
     sourced from the live agentd per-queue status at bootstrap. The
     ``paused_queues ⊆ queues`` invariant is enforced here so a stale pause
-    never produces a phantom paused flag. ``queue`` / ``is_logged`` /
-    ``is_paused`` are derived from these sets via ``_sync_derived``.
+    never produces a phantom paused flag. ``is_logged`` / ``is_paused`` are
+    derived from these sets via ``_sync_derived``.
+
+    ``home_queue`` seeds the legacy ``queue`` field (kept for v2.0.x clients)
+    so a logged-out agent still carries a queue-name string rather than
+    ``False``; when logged in, ``queue`` tracks the first runtime queue.
     """
     runtime_queues = list(queues or [])
     paused_queues = [q for q in (paused_queues or []) if q in runtime_queues]
@@ -101,7 +132,7 @@ def _build_agent_state(agent_id, number, fullname, queues=None, paused_queues=No
         "id": agent_id,
         "number": number,
         "fullname": fullname,
-        "queue": False,
+        "queue": home_queue or False,
         "queues": runtime_queues,
         "paused_queues": paused_queues,
         "is_logged": False,
@@ -262,7 +293,10 @@ class QueuesBusEventHandler(object):
                     (s for s in agentStatus if getattr(s, "id", None) == agent["id"]),
                     None,
                 )
-                runtime_queues, paused_queues = _membership_from_status(status)
+                runtime_queues, paused_queues, all_queues = _membership_from_status(
+                    status
+                )
+                home_queue = all_queues[0] if all_queues else False
 
                 if not agents[tenant_uuid].get(agent["id"]):
                     agents[tenant_uuid][agent["id"]] = _build_agent_state(
@@ -271,6 +305,7 @@ class QueuesBusEventHandler(object):
                         _agent_fullname(agent),
                         runtime_queues,
                         paused_queues,
+                        home_queue,
                     )
         logger.debug("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
         return agents[tenant_uuid]
@@ -282,10 +317,14 @@ class QueuesBusEventHandler(object):
             )
             # Not yet runtime-logged: the triggering membership event populates
             # ``queues`` right after this call, so seed with empty membership.
+            # ``home_queue`` seeds the legacy ``queue`` string from the
+            # confd-configured queues (matches the pre-multi-queue behaviour).
+            configured = _queue_names(agentInfo)
             agents[tenant_uuid][agent] = _build_agent_state(
                 agent,
                 member,
                 _agent_fullname(agentInfo),
+                home_queue=configured[0] if configured else False,
             )
 
     def get_stats(self, name):

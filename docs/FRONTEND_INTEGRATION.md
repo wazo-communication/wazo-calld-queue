@@ -126,7 +126,7 @@ An agent can serve **several queues at once**. Each agent object exposes:
 | `fullname` | string | display name | — |
 | `queues` | string[] | queues the agent is **currently** a member of (runtime) | per-queue |
 | `paused_queues` | string[] | queues in which the agent is **currently paused** | per-queue |
-| `queue` | string \| false | **first** of `queues` — kept for backward compat | derived |
+| `queue` | string \| false | legacy single-queue field — first runtime queue while logged in, else last-known/home queue; **not reset on logout** (back-compat) | derived |
 | `is_logged` | bool | `queues` is non-empty | derived |
 | `is_paused` | bool | `paused_queues` is non-empty | derived |
 | `is_ringing` | bool | the agent's device is ringing | **device** |
@@ -141,10 +141,14 @@ Rules to implement correctly:
 
 - **Use `queues`, not `queue`.** `queue` is only the first element, provided so
   older clients keep working. A multi-queue UI must read `queues`.
-- **`is_logged` / `is_paused` / `queue` are derived — never authoritative on
-  their own.** They are recomputed server-side from `queues` / `paused_queues`.
-  If you mirror this logic client-side, derive the same way:
+- **`is_logged` / `is_paused` are derived — never authoritative on their own.**
+  They are recomputed server-side from `queues` / `paused_queues`. If you mirror
+  this logic client-side, derive the same way:
   `is_logged = queues.length > 0`, `is_paused = paused_queues.length > 0`.
+- **Determine logout from `is_logged` (or empty `queues`), never from `queue`.**
+  `queue` keeps a queue-name string even when the agent is logged out, so that
+  v2.0.x clients that group by `agent.queue` keep working; it is not a logout
+  signal.
 - **Device fields are global, not per-queue.** `is_talking` / `is_ringing` /
   `is_offline` reflect the agent's phone, the same across all their queues.
   Don't render them per queue.
@@ -165,7 +169,7 @@ the agent object; the client just consumes `queue_agents_status`.
 | Log into queue A | `queues += [A]`, `logged_at` set if first | `is_logged: true`, `queue: "A"` |
 | Also log into queue B | `queues += [B]` | `queues: ["A","B"]`, `is_logged` stays true |
 | Remove from queue A only | `queues -= [A]` (also drops A from `paused_queues`) | `queues: ["B"]`, **`is_logged` stays true** |
-| Remove from the last queue | `queues` empties → session reset | `is_logged: false`, `queue: false`, device/session fields cleared |
+| Remove from the last queue | `queues` empties → session reset | `is_logged: false`, `queues: []`, `queue` keeps last name, device/session fields cleared |
 | Pause in queue B | `paused_queues += [B]`, `paused_at` set if first | `is_paused: true` |
 | Unpause queue A (still paused in B) | `paused_queues -= [A]` | `is_paused` stays true |
 | Unpause the last paused queue | `paused_queues` empties | `is_paused: false`, `paused_at: ""` |
@@ -316,8 +320,10 @@ function renderAgent(a) {
   "unknown", not "just now".
 - **`talked_with_*` is populated on `QueueCallerLeave`** (when a caller is
   connected to the agent) and cleared when the call ends.
-- **`queue: false`** means the agent is in no queue (logged out). Handle the
-  boolean-vs-string union.
+- **`queue` is a back-compat string, not a logout signal.** It stays a
+  queue-name string across logout (only `false` if the agent has no configured
+  queue at all). Read `is_logged` / `queues` to know whether the agent is
+  connected. The type is still a `string | false` union — handle both.
 - **Per-worker state:** if your token is load-balanced across workers, a
   `GET /queues/agents_status` may briefly differ from the event stream. Reconcile
   toward the events.

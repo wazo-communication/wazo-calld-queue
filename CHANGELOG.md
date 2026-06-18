@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-06-18
+
+### Fixed
+- Backward compatibility of the `queue_agents_status` payload with
+  pre-multi-queue clients (v2.0.x). The legacy `queue` field had started being
+  reset to `false` whenever an agent was logged out; clients that group agents
+  by `agent.queue` (expecting a string) then dropped logged-out agents, and the
+  agents did not reappear on reconnect. `queue` now stays a queue-name string
+  across logout (seeded from the agent's configured/home queue, and never reset
+  on the last `QueueMemberRemoved`); connection state is conveyed by `is_logged`
+  and the runtime `queues` set. The multi-queue fields (`queues`,
+  `paused_queues`) are unchanged.
+
 ## [2.3.0] - 2026-06-18
 
 ### Changed
