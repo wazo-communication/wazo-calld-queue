@@ -296,7 +296,11 @@ class QueuesBusEventHandler(object):
                 runtime_queues, paused_queues, all_queues = _membership_from_status(
                     status
                 )
-                home_queue = all_queues[0] if all_queues else False
+                # Seed the legacy ``queue`` from agentd's queue list, falling
+                # back to confd when agentd has no status (or no queues) for the
+                # agent, so a configured agent never gets ``queue: false``.
+                home_queues = all_queues or _queue_names(agent)
+                home_queue = home_queues[0] if home_queues else False
 
                 if not agents[tenant_uuid].get(agent["id"]):
                     agents[tenant_uuid][agent["id"]] = _build_agent_state(

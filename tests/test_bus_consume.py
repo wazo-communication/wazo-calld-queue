@@ -776,6 +776,29 @@ class TestLegacyQueueFieldBackCompat:
         assert result[1]["is_logged"] is False
         assert result[1]["queues"] == []
 
+    def test_home_queue_falls_back_to_confd_when_agentd_has_no_status(self, handler):
+        # agentd returns no status for the agent (e.g. never logged in since
+        # agentd started): the home queue must still come from confd, so a
+        # configured agent keeps a queue-name string rather than ``false``.
+        handler.confd.agents.list.return_value = {
+            "items": [
+                {
+                    "id": 1,
+                    "firstname": "John",
+                    "lastname": "Doe",
+                    "number": "1001",
+                    "queues": [{"name": "support"}, {"name": "sales"}],
+                }
+            ]
+        }
+        handler.agentd.agents.get_agent_statuses.return_value = []
+
+        result = handler.get_agents_status(TENANT)
+
+        assert result[1]["queue"] == "support"
+        assert result[1]["queues"] == []
+        assert result[1]["is_logged"] is False
+
     def test_queue_not_reset_to_false_on_full_logout(self, handler):
         bus_consume.agents[TENANT] = {
             5: bus_consume._build_agent_state(
