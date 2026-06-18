@@ -30,6 +30,78 @@ logger = logging.getLogger(__name__)
 AGENT_ID_FROM_IFACE = re.compile(r"^Local/id-(\d+)@agentcallback$")
 MEMBER_NUM_FROM_AGENT = re.compile(r"^Agent/(\d+)$")
 
+# Fields required to safely process each membership-mutating event. A malformed
+# event missing one of these is dropped (and logged) rather than raising a
+# KeyError that would crash the handler and drop the rest of the batch.
+_REQUIRED_EVENT_FIELDS = {
+    "QueueMemberAdded": ("Membership", "Interface", "MemberName", "Queue", "StateInterface"),
+    "QueueMemberRemoved": ("Membership", "Interface", "MemberName", "Queue"),
+    "QueueMemberPause": ("Membership", "Interface", "MemberName", "Queue", "Paused"),
+}
+
+
+def _sync_derived(state):
+    """Recompute fields derived from the queue membership sets.
+
+    ``queue`` / ``is_logged`` / ``is_paused`` are never written directly; they
+    always reflect ``queues`` (runtime membership) and ``paused_queues`` so an
+    agent serving several queues stays consistent.
+    """
+    queues = state.setdefault("queues", [])
+    paused_queues = state.setdefault("paused_queues", [])
+    state["queue"] = queues[0] if queues else False
+    state["is_logged"] = bool(queues)
+    state["is_paused"] = bool(paused_queues)
+
+
+def _agent_fullname(info):
+    fullname = ""
+    if str(info["firstname"]) != "None":
+        fullname = str(info["firstname"])
+    if str(info["lastname"]) != "None":
+        fullname += " " + str(info["lastname"])
+    return fullname
+
+
+def _queue_names(info):
+    try:
+        return [q.get("name") for q in info["queues"] if q.get("name")]
+    except (KeyError, TypeError):
+        return []
+
+
+def _build_agent_state(
+    agent_id, number, fullname, configured_queues, is_logged, is_paused
+):
+    """Build a fresh agent state dict.
+
+    ``configured_queues`` is the confd-configured membership. The runtime
+    ``queues`` set is seeded from it only when the agent is logged in, so the
+    derived flags stay consistent; live events keep it up to date afterwards.
+    """
+    runtime_queues = list(configured_queues) if is_logged else []
+    paused_queues = list(runtime_queues) if is_paused else []
+    state = {
+        "id": agent_id,
+        "number": number,
+        "fullname": fullname,
+        "queue": False,
+        "queues": runtime_queues,
+        "paused_queues": paused_queues,
+        "is_logged": False,
+        "is_paused": False,
+        "is_offline": False,
+        "is_talking": False,
+        "is_ringing": False,
+        "logged_at": "",
+        "paused_at": "",
+        "talked_at": "",
+        "talked_with_number": "",
+        "talked_with_name": "",
+    }
+    _sync_derived(state)
+    return state
+
 
 class QueuesBusEventHandler(object):
     def __init__(self, bus_publisher, confd, agentd):
@@ -170,12 +242,6 @@ class QueuesBusEventHandler(object):
             agentStatus = self.agentd.agents.get_agent_statuses(tenant_uuid=tenant_uuid)
 
             for agent in agentList["items"]:
-                agent_fullname = ""
-                if str(agent["firstname"]) != "None":
-                    agent_fullname = str(agent["firstname"])
-                if str(agent["lastname"]) != "None":
-                    agent_fullname += " " + str(agent["lastname"])
-
                 status = [
                     x.__dict__
                     for x in agentStatus
@@ -190,31 +256,14 @@ class QueuesBusEventHandler(object):
                 else:
                     agent_ispaused = False
 
-                try:
-                    agent_first_queue = agent["queues"][0].get("name")
-                except (IndexError, KeyError, TypeError):
-                    agent_first_queue = False
-
                 if not agents[tenant_uuid].get(agent["id"]):
-                    agents[tenant_uuid].update(
-                        {
-                            agent["id"]: {
-                                "id": agent["id"],
-                                "number": agent["number"],
-                                "fullname": agent_fullname,
-                                "queue": agent_first_queue,
-                                "is_logged": agent_islogged,
-                                "is_paused": agent_ispaused,
-                                "is_offline": False,
-                                "is_talking": False,
-                                "is_ringing": False,
-                                "logged_at": "",
-                                "paused_at": "",
-                                "talked_at": "",
-                                "talked_with_number": "",
-                                "talked_with_name": "",
-                            }
-                        }
+                    agents[tenant_uuid][agent["id"]] = _build_agent_state(
+                        agent["id"],
+                        agent["number"],
+                        _agent_fullname(agent),
+                        _queue_names(agent),
+                        agent_islogged,
+                        agent_ispaused,
                     )
         logger.debug("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
         return agents[tenant_uuid]
@@ -224,34 +273,15 @@ class QueuesBusEventHandler(object):
             agentInfo = self.confd.agents.get(
                 resource_or_id=agent, tenant_uuid=tenant_uuid
             )
-            agent_fullname = ""
-            if str(agentInfo["firstname"]) != "None":
-                agent_fullname = str(agentInfo["firstname"])
-            if str(agentInfo["lastname"]) != "None":
-                agent_fullname += " " + str(agentInfo["lastname"])
-            try:
-                agent_first_queue = agentInfo["queues"][0].get("name")
-            except (KeyError, TypeError, IndexError):
-                agent_first_queue = False
-            agents[tenant_uuid].update(
-                {
-                    agent: {
-                        "id": agent,
-                        "number": member,
-                        "fullname": agent_fullname,
-                        "queue": agent_first_queue,
-                        "is_logged": False,
-                        "is_paused": False,
-                        "is_offline": False,
-                        "is_talking": False,
-                        "is_ringing": False,
-                        "logged_at": "",
-                        "paused_at": "",
-                        "talked_at": "",
-                        "talked_with_number": "",
-                        "talked_with_name": "",
-                    }
-                }
+            # Not yet runtime-logged: the triggering membership event populates
+            # ``queues`` right after this call.
+            agents[tenant_uuid][agent] = _build_agent_state(
+                agent,
+                member,
+                _agent_fullname(agentInfo),
+                _queue_names(agentInfo),
+                is_logged=False,
+                is_paused=False,
             )
 
     def get_stats(self, name):
@@ -278,6 +308,18 @@ class QueuesBusEventHandler(object):
     def _agents_status(self, event, tenant_uuid):
         agent = 0
 
+        required = _REQUIRED_EVENT_FIELDS.get(event.get("Event"))
+        if required:
+            missing = [field for field in required if field not in event]
+            if missing:
+                logger.warning(
+                    "Dropping malformed %s event for tenant %s: missing fields %s",
+                    event.get("Event"),
+                    tenant_uuid,
+                    missing,
+                )
+                return
+
         # Check if agents for this tenant exists
         if event["Event"] != "QueueCallerLeave" and event["Membership"] == "dynamic":
             interface = AGENT_ID_FROM_IFACE.match(event["Interface"])
@@ -288,8 +330,6 @@ class QueuesBusEventHandler(object):
                 member = MEMBER_NUM_FROM_AGENT.match(event["MemberName"])
                 member_num = int(member.group(1))
                 self.add_agent(tenant_uuid, agent, member_num)
-            if agents[tenant_uuid][agent]["queue"] != event["Queue"]:
-                agents[tenant_uuid][agent]["queue"] = event["Queue"]
 
         # QueueCallerLeave Get info about call
         if (
@@ -336,37 +376,80 @@ class QueuesBusEventHandler(object):
                 agents[tenant_uuid][agent]["talked_with_name"] = ""
 
         if event["Event"] == "QueueMemberAdded" and event["Membership"] == "dynamic":
-            # Handle connection
-            agents[tenant_uuid][agent]["is_logged"] = True
-            agents[tenant_uuid][agent]["interface"] = event["StateInterface"]
-            agents[tenant_uuid][agent]["logged_at"] = datetime.datetime.now().strftime(
-                "%Y-%m-%dT%H:%M:%S.%f"
-            )  # LoginTime
+            # Handle connection to a queue (an agent may serve several queues)
+            state = agents[tenant_uuid][agent]
+            state.setdefault("queues", [])
+            if event["Queue"] not in state["queues"]:
+                state["queues"].append(event["Queue"])
+            state["interface"] = event["StateInterface"]
+            if not state.get("logged_at"):
+                # LoginTime: set on first observed queue join, kept across
+                # further joins. Keying on the empty timestamp (rather than on
+                # prior membership) also backfills it after a REST/restart
+                # bootstrap, which seeds ``queues`` but no ``logged_at``.
+                state["logged_at"] = datetime.datetime.now().strftime(
+                    "%Y-%m-%dT%H:%M:%S.%f"
+                )
+            _sync_derived(state)
 
         if event["Event"] == "QueueMemberRemoved" and event["Membership"] == "dynamic":
-            # Handle disconnection
-            agents[tenant_uuid][agent]["is_logged"] = False
-            agents[tenant_uuid][agent]["is_paused"] = False
-            agents[tenant_uuid][agent]["is_talking"] = False
-            agents[tenant_uuid][agent]["is_ringing"] = False
-            agents[tenant_uuid][agent]["logged_at"] = ""
-            agents[tenant_uuid][agent]["paused_at"] = ""
-            agents[tenant_uuid][agent]["talked_at"] = ""
-            agents[tenant_uuid][agent]["talked_with_number"] = ""
-            agents[tenant_uuid][agent]["talked_with_name"] = ""
+            # Handle disconnection from a single queue
+            state = agents[tenant_uuid][agent]
+            state.setdefault("queues", [])
+            state.setdefault("paused_queues", [])
+            if event["Queue"] in state["queues"]:
+                state["queues"].remove(event["Queue"])
+            if event["Queue"] in state["paused_queues"]:
+                state["paused_queues"].remove(event["Queue"])
+            if not state["queues"]:
+                # Fully logged out: reset session/device fields
+                state["is_talking"] = False
+                state["is_ringing"] = False
+                state["logged_at"] = ""
+                state["paused_at"] = ""
+                state["talked_at"] = ""
+                state["talked_with_number"] = ""
+                state["talked_with_name"] = ""
+            _sync_derived(state)
 
         if event["Event"] == "QueueMemberPause" and event["Membership"] == "dynamic":
-            # Handle pause
-            if not agents[tenant_uuid].get(agent):
-                agents[tenant_uuid].update({agent: {}})
+            # Handle pause, tracked per queue (Asterisk pauses per membership).
+            # The agent is always materialised by the membership block above
+            # (add_agent), so a fully-formed state dict is guaranteed here.
+            state = agents[tenant_uuid][agent]
+            state.setdefault("queues", [])
+            state.setdefault("paused_queues", [])
             if event["Paused"] == "1":
-                agents[tenant_uuid][agent]["is_paused"] = True
-                agents[tenant_uuid][agent]["paused_at"] = (
-                    datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-                )  # LastPause
+                # Keep the invariant paused_queues ⊆ queues: never report an
+                # agent as paused in a queue it is not a (runtime) member of.
+                # This drops stray pauses that arrive after a QueueMemberRemoved
+                # for the same queue, which would otherwise leave a logged-out
+                # agent flagged as paused.
+                if event["Queue"] not in state["queues"]:
+                    logger.warning(
+                        "Ignoring pause for tenant %s agent %s in queue %s: "
+                        "not a member of that queue",
+                        tenant_uuid,
+                        agent,
+                        event["Queue"],
+                    )
+                else:
+                    if event["Queue"] not in state["paused_queues"]:
+                        state["paused_queues"].append(event["Queue"])
+                    if not state.get("paused_at"):
+                        # LastPause: set on first observed pause, kept while any
+                        # queue is paused. Keying on the empty timestamp also
+                        # backfills it after a bootstrap that seeds
+                        # ``paused_queues`` but no ``paused_at``.
+                        state["paused_at"] = datetime.datetime.now().strftime(
+                            "%Y-%m-%dT%H:%M:%S.%f"
+                        )
             else:
-                agents[tenant_uuid][agent]["is_paused"] = False
-                agents[tenant_uuid][agent]["paused_at"] = ""
+                if event["Queue"] in state["paused_queues"]:
+                    state["paused_queues"].remove(event["Queue"])
+                if not state["paused_queues"]:
+                    state["paused_at"] = ""
+            _sync_derived(state)
 
         if agent != 0:
             self._queue_agents_status(agents, tenant_uuid, agent)

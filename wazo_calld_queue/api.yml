@@ -159,32 +159,64 @@ definitions:
   QueueAgentsStatus:
     type: object
     properties:
-      is_loggued:
-        description: Is loggued
+      id:
+        description: Unique identifier of the agent
+        type: integer
+      number:
+        description: Agent number
+        type: string
+      fullname:
+        description: Agent full name
+        type: string
+      queue:
+        description: >-
+          Representative queue (the first of `queues`). Kept for backward
+          compatibility; prefer `queues` for multi-queue agents.
+        type: string
+      queues:
+        description: Names of the queues the agent is currently a member of
+        type: array
+        items:
+          type: string
+      paused_queues:
+        description: Names of the queues in which the agent is currently paused
+        type: array
+        items:
+          type: string
+      is_logged:
+        description: Whether the agent is logged into at least one queue
         type: boolean
       is_paused:
-        description: Is paused
+        description: Whether the agent is paused in at least one queue
         type: boolean
       is_ringing:
-        description: Is ringing
+        description: Whether the agent's device is currently ringing
         type: boolean
       is_talking:
-        description: Is talking
+        description: Whether the agent is currently on a call
         type: boolean
-      loggued_at:
-        description: Loggued at
+      is_offline:
+        description: Whether the agent device is offline (websocket down)
+        type: boolean
+      interface:
+        description: >-
+          Asterisk state interface backing the agent's runtime membership
+          (set when the agent joins a queue).
+        type: string
+      logged_at:
+        description: Login time of the agent
         type: string
       paused_at:
-        description: Paused at
+        description: Time of the first active pause
         type: string
       talked_at:
-        description: Talked at
+        description: Start time of the agent's current call
         type: string
       talked_with_number:
-        description: Phone number of the caller
+        description: Phone number of the current caller
         type: string
       talked_with_name:
-        description: Name of the caller
+        description: Name of the current caller
         type: string
   QueueAddMember:
     type: object
