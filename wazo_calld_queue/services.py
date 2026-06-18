@@ -1,8 +1,6 @@
 # Copyright 2018-2023 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
-from .bus_consume import QueuesBusEventHandler
-
 
 class QueueService(object):
     def __init__(self, amid, confd, ari, agentd, publisher):
@@ -56,10 +54,10 @@ class QueueService(object):
         return self.amid.action("queuepause", pause_member)
 
     def livestats(self, queue_name):
-        return QueuesBusEventHandler.get_stats(self, queue_name)
+        return self.publisher.get_stats(queue_name)
 
     def agents_status(self, tenant_uuid):
-        return QueuesBusEventHandler.get_agents_status(self, tenant_uuid)
+        return self.publisher.get_agents_status(tenant_uuid)
 
     def _queues(self, queue):
         return {

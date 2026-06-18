@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.1] - 2026-06-18
 
+### Changed
+- Internal: `QueueService.livestats` / `agents_status` now delegate to the bus
+  event handler instance (`self.publisher`) instead of calling its methods
+  unbound via the class with `self`. No behaviour change (same clients, same
+  shared state), but it removes a latent `AttributeError` should those handler
+  methods ever use a handler-only attribute.
+
 ### Fixed
 - Backward compatibility of the `queue_agents_status` payload with
   pre-multi-queue clients (v2.0.x). The legacy `queue` field had started being

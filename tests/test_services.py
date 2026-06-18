@@ -5,7 +5,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from wazo_calld_queue import bus_consume
 from wazo_calld_queue.services import QueueService
 
 
@@ -151,27 +150,17 @@ class TestInterceptCall:
 
 
 class TestStatsDelegation:
-    def test_livestats_returns_queue_stats(self, service):
+    """``QueueService`` delegates stats/agent queries to its bus event handler
+    instance (``self.publisher``), not via an unbound class-method call."""
+
+    def test_livestats_delegates_to_handler(self, service):
         result = service.livestats("support")
 
-        assert result is bus_consume.stats["support"]
-        assert result["count"] == 0
+        service.publisher.get_stats.assert_called_once_with("support")
+        assert result is service.publisher.get_stats.return_value
 
-    def test_agents_status_uses_service_clients(self, service):
-        service.confd.agents.list.return_value = {
-            "items": [
-                {
-                    "id": 1,
-                    "firstname": "John",
-                    "lastname": "Doe",
-                    "number": "1001",
-                    "queues": [{"name": "support"}],
-                }
-            ]
-        }
-        service.agentd.agents.get_agent_statuses.return_value = []
-
+    def test_agents_status_delegates_to_handler(self, service):
         result = service.agents_status("tenant-1")
 
-        assert result[1]["fullname"] == "John Doe"
-        assert result is bus_consume.agents["tenant-1"]
+        service.publisher.get_agents_status.assert_called_once_with("tenant-1")
+        assert result is service.publisher.get_agents_status.return_value
