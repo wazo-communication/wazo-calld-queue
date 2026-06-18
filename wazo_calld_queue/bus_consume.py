@@ -5,6 +5,7 @@ import datetime
 import logging
 import math
 import re
+import threading
 
 from .events import (
     QueueCallerAbandonEvent,
@@ -19,10 +20,6 @@ from .events import (
     QueueLiveStatsEvent,
     QueueAgentsStatusEvent,
 )
-
-
-stats = {}
-agents = {}
 
 
 logger = logging.getLogger(__name__)
@@ -155,6 +152,17 @@ class QueuesBusEventHandler(object):
         self.bus_publisher = bus_publisher
         self.confd = confd
         self.agentd = agentd
+        # Real-time state, owned by this handler instance (not module globals).
+        # wazo-calld runs as a single process with a cheroot thread pool: the
+        # bus consumer thread mutates this state while REST worker threads read
+        # (and lazily seed) it, so every access is guarded by ``_lock``. The
+        # lock is reentrant because the state methods call one another
+        # (``_agents_status`` -> ``get_agents_status`` -> ``add_agent``).
+        # State is intentionally in-memory: it is rebuilt from agentd/confd on
+        # demand and is not persisted across restarts (see AGENTS.md).
+        self._stats = {}
+        self._agents = {}
+        self._lock = threading.RLock()
 
     def subscribe(self, bus_consumer):
         bus_consumer.subscribe("QueueCallerAbandon", self._queue_caller_abandon)
@@ -274,85 +282,110 @@ class QueuesBusEventHandler(object):
             bus_event = QueueMemberStatusEvent(event, tenant_uuid)
         self.bus_publisher.publish(bus_event)
 
-    def _queue_livestats(self, event, tenant_uuid):
-        bus_event = QueueLiveStatsEvent(event, tenant_uuid)
+    def _queue_livestats(self, tenant_uuid):
+        # Caller holds ``self._lock``. Publishes the whole stats map.
+        bus_event = QueueLiveStatsEvent(self._stats, tenant_uuid)
         self.bus_publisher.publish(bus_event)
 
-    def _queue_agents_status(self, event, tenant_uuid, agent):
-        bus_event = QueueAgentsStatusEvent(event[tenant_uuid][agent], tenant_uuid)
+    def _queue_agents_status(self, tenant_uuid, agent):
+        # Caller holds ``self._lock``. Publishes a single agent object.
+        bus_event = QueueAgentsStatusEvent(self._agents[tenant_uuid][agent], tenant_uuid)
         self.bus_publisher.publish(bus_event)
 
     def get_agents_status(self, tenant_uuid: str) -> dict:
-        if not agents.get(tenant_uuid):
-            agents.update({tenant_uuid: {}})
-            agentList = self.confd.agents.list(tenant_uuid=tenant_uuid)
-            agentStatus = self.agentd.agents.get_agent_statuses(tenant_uuid=tenant_uuid)
-
-            for agent in agentList["items"]:
-                status = next(
-                    (s for s in agentStatus if getattr(s, "id", None) == agent["id"]),
-                    None,
+        with self._lock:
+            if not self._agents.get(tenant_uuid):
+                self._agents.update({tenant_uuid: {}})
+                agentList = self.confd.agents.list(tenant_uuid=tenant_uuid)
+                agentStatus = self.agentd.agents.get_agent_statuses(
+                    tenant_uuid=tenant_uuid
                 )
-                runtime_queues, paused_queues, all_queues = _membership_from_status(
-                    status
-                )
-                # Seed the legacy ``queue`` from agentd's queue list, falling
-                # back to confd when agentd has no status (or no queues) for the
-                # agent, so a configured agent never gets ``queue: false``.
-                home_queues = all_queues or _queue_names(agent)
-                home_queue = home_queues[0] if home_queues else False
 
-                if not agents[tenant_uuid].get(agent["id"]):
-                    agents[tenant_uuid][agent["id"]] = _build_agent_state(
-                        agent["id"],
-                        agent["number"],
-                        _agent_fullname(agent),
-                        runtime_queues,
-                        paused_queues,
-                        home_queue,
+                for agent in agentList["items"]:
+                    status = next(
+                        (
+                            s
+                            for s in agentStatus
+                            if getattr(s, "id", None) == agent["id"]
+                        ),
+                        None,
                     )
-        logger.debug("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
-        return agents[tenant_uuid]
+                    runtime_queues, paused_queues, all_queues = (
+                        _membership_from_status(status)
+                    )
+                    # Seed the legacy ``queue`` from agentd's queue list, falling
+                    # back to confd when agentd has no status (or no queues) for
+                    # the agent, so a configured agent never gets ``queue:
+                    # false``.
+                    home_queues = all_queues or _queue_names(agent)
+                    home_queue = home_queues[0] if home_queues else False
+
+                    if not self._agents[tenant_uuid].get(agent["id"]):
+                        self._agents[tenant_uuid][agent["id"]] = _build_agent_state(
+                            agent["id"],
+                            agent["number"],
+                            _agent_fullname(agent),
+                            runtime_queues,
+                            paused_queues,
+                            home_queue,
+                        )
+            logger.debug(
+                "agents status for tenant %s: %s",
+                tenant_uuid,
+                self._agents[tenant_uuid],
+            )
+            return self._agents[tenant_uuid]
 
     def add_agent(self, tenant_uuid, agent, member):
-        if not agents[tenant_uuid].get(agent):
-            agentInfo = self.confd.agents.get(
-                resource_or_id=agent, tenant_uuid=tenant_uuid
-            )
-            # Not yet runtime-logged: the triggering membership event populates
-            # ``queues`` right after this call, so seed with empty membership.
-            # ``home_queue`` seeds the legacy ``queue`` string from the
-            # confd-configured queues (matches the pre-multi-queue behaviour).
-            configured = _queue_names(agentInfo)
-            agents[tenant_uuid][agent] = _build_agent_state(
-                agent,
-                member,
-                _agent_fullname(agentInfo),
-                home_queue=configured[0] if configured else False,
-            )
+        with self._lock:
+            if not self._agents[tenant_uuid].get(agent):
+                agentInfo = self.confd.agents.get(
+                    resource_or_id=agent, tenant_uuid=tenant_uuid
+                )
+                # Not yet runtime-logged: the triggering membership event
+                # populates ``queues`` right after this call, so seed with empty
+                # membership. ``home_queue`` seeds the legacy ``queue`` string
+                # from the confd-configured queues (matches the pre-multi-queue
+                # behaviour).
+                configured = _queue_names(agentInfo)
+                self._agents[tenant_uuid][agent] = _build_agent_state(
+                    agent,
+                    member,
+                    _agent_fullname(agentInfo),
+                    home_queue=configured[0] if configured else False,
+                )
 
     def get_stats(self, name):
-        # If the queue stats doesnot exist, create the object with default values || Reset if day is different
-        if not stats.get(name) or (
-            stats.get(name) and stats[name]["updated_at"] != datetime.datetime.now().day
-        ):
-            stats.update(
-                {
-                    name: {
-                        "count": 0,
-                        "count_color": "green",
-                        "received": 0,
-                        "abandonned": 0,
-                        "answered": 0,
-                        "awr": 0,
-                        "waiting_calls": [],
-                        "updated_at": datetime.datetime.now().day,
+        with self._lock:
+            # If the queue stats doesnot exist, create the object with default values || Reset if day is different
+            if not self._stats.get(name) or (
+                self._stats.get(name)
+                and self._stats[name]["updated_at"] != datetime.datetime.now().day
+            ):
+                self._stats.update(
+                    {
+                        name: {
+                            "count": 0,
+                            "count_color": "green",
+                            "received": 0,
+                            "abandonned": 0,
+                            "answered": 0,
+                            "awr": 0,
+                            "waiting_calls": [],
+                            "updated_at": datetime.datetime.now().day,
+                        }
                     }
-                }
-            )
-        return stats[name]
+                )
+            return self._stats[name]
 
     def _agents_status(self, event, tenant_uuid):
+        with self._lock:
+            self._agents_status_locked(event, tenant_uuid)
+
+    def _agents_status_locked(self, event, tenant_uuid):
+        # Caller holds ``self._lock``. ``agents`` aliases the instance state so
+        # the body below reads/mutates the shared dict under the lock.
+        agents = self._agents
         agent = 0
 
         required = _REQUIRED_EVENT_FIELDS.get(event.get("Event"))
@@ -514,9 +547,15 @@ class QueuesBusEventHandler(object):
             _sync_derived(state)
 
         if agent != 0:
-            self._queue_agents_status(agents, tenant_uuid, agent)
+            self._queue_agents_status(tenant_uuid, agent)
 
     def _livestats(self, event, tenant_uuid):
+        with self._lock:
+            self._livestats_locked(event, tenant_uuid)
+
+    def _livestats_locked(self, event, tenant_uuid):
+        # Caller holds ``self._lock``. ``stats`` aliases the instance state.
+        stats = self._stats
         name = event["Queue"]
 
         self.get_stats(name)
@@ -570,7 +609,7 @@ class QueuesBusEventHandler(object):
         if stats[name]["count"] > 1:
             stats[name]["count_color"] = "red"
 
-        self._queue_livestats(stats, tenant_uuid)
+        self._queue_livestats(tenant_uuid)
 
     def _extract_tenant_uuid(self, event):
         try:

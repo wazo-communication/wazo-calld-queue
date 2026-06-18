@@ -3,6 +3,7 @@
 
 import datetime
 import logging
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -63,6 +64,16 @@ def _member_removed_event(queue, agent_id=5, member="1001", tenant=TENANT):
     }
 
 
+def _leave_event(uniqueid, queue="support", count="0", tenant=TENANT):
+    return {
+        "Event": "QueueCallerLeave",
+        "Queue": queue,
+        "Context": "queue",
+        "Count": count,
+        "Uniqueid": uniqueid,
+    }
+
+
 def _member_pause_event(queue, paused, agent_id=5, member="1001", tenant=TENANT):
     return {
         "Event": "QueueMemberPause",
@@ -112,7 +123,7 @@ class TestGetStats:
         assert result["awr"] == 0
         assert result["waiting_calls"] == []
         assert result["updated_at"] == frozen_now.day
-        assert bus_consume.stats["support"] is result
+        assert handler._stats["support"] is result
 
     def test_returns_existing_entry_same_day(self, handler):
         first = handler.get_stats("support")
@@ -140,7 +151,7 @@ class TestLiveStats:
     def test_caller_join_tracks_waiting_call(self, handler):
         handler._livestats(_join_event("111", count="1"), TENANT)
 
-        stats = bus_consume.stats["support"]
+        stats = handler._stats["support"]
         assert stats["count"] == 1
         assert stats["count_color"] == "green"
         assert len(stats["waiting_calls"]) == 1
@@ -150,7 +161,7 @@ class TestLiveStats:
     def test_caller_join_count_color_turns_red_above_one(self, handler):
         handler._livestats(_join_event("111", count="2"), TENANT)
 
-        assert bus_consume.stats["support"]["count_color"] == "red"
+        assert handler._stats["support"]["count_color"] == "red"
 
     def test_caller_leave_updates_counters(self, handler):
         handler._livestats(_join_event("111", count="1"), TENANT)
@@ -163,7 +174,7 @@ class TestLiveStats:
 
         handler._livestats(leave, TENANT)
 
-        stats = bus_consume.stats["support"]
+        stats = handler._stats["support"]
         assert stats["answered"] == 1
         assert stats["received"] == 1
         assert stats["awr"] == 100
@@ -179,7 +190,7 @@ class TestLiveStats:
         }
         handler._livestats(abandon, TENANT)
 
-        stats = bus_consume.stats["support"]
+        stats = handler._stats["support"]
         assert stats["abandonned"] == 1
         assert stats["waiting_calls"] == []
 
@@ -196,7 +207,7 @@ class TestLiveStats:
         }
         handler._livestats(abandon_b, TENANT)
 
-        remaining = [c["uniqueid"] for c in bus_consume.stats["support"]["waiting_calls"]]
+        remaining = [c["uniqueid"] for c in handler._stats["support"]["waiting_calls"]]
         assert remaining == ["A", "C"]
 
     def test_publishes_livestats_event(self, handler):
@@ -352,7 +363,7 @@ class TestGetAgentsStatus:
 
 class TestAddAgent:
     def test_adds_missing_agent_from_confd(self, handler):
-        bus_consume.agents[TENANT] = {}
+        handler._agents[TENANT] = {}
         handler.confd.agents.get.return_value = {
             "firstname": "John",
             "lastname": "Doe",
@@ -361,7 +372,7 @@ class TestAddAgent:
 
         handler.add_agent(TENANT, 5, "1001")
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["id"] == 5
         assert agent["number"] == "1001"
         assert agent["fullname"] == "John Doe"
@@ -372,7 +383,7 @@ class TestAddAgent:
         assert agent["is_logged"] is False
 
     def test_initializes_multi_queue(self, handler):
-        bus_consume.agents[TENANT] = {}
+        handler._agents[TENANT] = {}
         handler.confd.agents.get.return_value = {
             "firstname": "John",
             "lastname": "Doe",
@@ -381,7 +392,7 @@ class TestAddAgent:
 
         handler.add_agent(TENANT, 5, "1001")
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         # Not yet runtime-logged, so derived membership starts empty; the legacy
         # ``queue`` string is seeded from the first configured queue.
         assert agent["queues"] == []
@@ -390,11 +401,11 @@ class TestAddAgent:
         assert agent["paused_queues"] == []
 
     def test_does_not_overwrite_existing_agent(self, handler):
-        bus_consume.agents[TENANT] = {5: {"id": 5, "fullname": "Existing"}}
+        handler._agents[TENANT] = {5: {"id": 5, "fullname": "Existing"}}
 
         handler.add_agent(TENANT, 5, "1001")
 
-        assert bus_consume.agents[TENANT][5]["fullname"] == "Existing"
+        assert handler._agents[TENANT][5]["fullname"] == "Existing"
         handler.confd.agents.get.assert_not_called()
 
 
@@ -436,7 +447,7 @@ class TestMemberEventHandlers:
         assert published[0].tenant_uuid == ZERO_UUID
 
     def test_member_pause_sets_paused_and_publishes_status(self, handler):
-        bus_consume.agents[TENANT] = {
+        handler._agents[TENANT] = {
             5: {
                 "id": 5,
                 "number": "1001",
@@ -459,7 +470,7 @@ class TestMemberEventHandlers:
 
         handler._queue_member_pause(event)
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["is_paused"] is True
         assert agent["paused_at"] != ""
 
@@ -468,7 +479,7 @@ class TestMemberEventHandlers:
         assert published[0].content == agent
 
     def test_member_status_talking_updates_agent(self, handler):
-        bus_consume.agents[TENANT] = {
+        handler._agents[TENANT] = {
             5: {
                 "id": 5,
                 "number": "1001",
@@ -492,7 +503,7 @@ class TestMemberEventHandlers:
 
         handler._queue_member_status(event)
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["is_talking"] is True
         assert agent["is_ringing"] is False
         assert agent["talked_at"] != ""
@@ -514,16 +525,16 @@ class TestCallerEventHandlers:
 
         handler._queue_caller_join(event)
 
-        assert "support" not in bus_consume.stats
+        assert "support" not in handler._stats
         published = _published_events(handler)
         assert len(published) == 1
         assert isinstance(published[0], QueueCallerJoinEvent)
 
 
 class TestMultiQueueMembership:
-    def _logged_agent(self, queues, paused_queues=None):
+    def _logged_agent(self, handler, queues, paused_queues=None):
         """Seed an agent already logged into ``queues`` (runtime membership)."""
-        bus_consume.agents[TENANT] = {
+        handler._agents[TENANT] = {
             5: {
                 "id": 5,
                 "number": "1001",
@@ -543,37 +554,37 @@ class TestMultiQueueMembership:
                 "talked_with_name": "",
             }
         }
-        return bus_consume.agents[TENANT][5]
+        return handler._agents[TENANT][5]
 
     def test_member_added_to_second_queue_keeps_both(self, handler):
-        self._logged_agent(["support"])
+        self._logged_agent(handler, ["support"])
 
         handler._queue_member_added(_member_added_event("sales"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == ["support", "sales"]
         assert agent["is_logged"] is True
 
     def test_member_removed_from_one_queue_stays_logged(self, handler):
-        self._logged_agent(["support", "sales"])
+        self._logged_agent(handler, ["support", "sales"])
 
         handler._queue_member_removed(_member_removed_event("sales"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == ["support"]
         assert agent["is_logged"] is True
         # Session is preserved while still member of another queue.
         assert agent["logged_at"] == "2026-06-17T12:00:00.000000"
 
     def test_member_removed_from_last_queue_logs_out(self, handler):
-        agent = self._logged_agent(["support"])
+        agent = self._logged_agent(handler, ["support"])
         agent["is_talking"] = True
         agent["talked_at"] = "2026-06-17T12:30:00.000000"
         agent["talked_with_number"] = "2000"
 
         handler._queue_member_removed(_member_removed_event("support"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == []
         assert agent["is_logged"] is False
         assert agent["is_talking"] is False
@@ -583,74 +594,74 @@ class TestMultiQueueMembership:
         assert agent["talked_with_number"] == ""
 
     def test_queue_field_is_first_of_queues(self, handler):
-        self._logged_agent(["support"])
+        self._logged_agent(handler, ["support"])
 
         handler._queue_member_added(_member_added_event("sales"))
-        assert bus_consume.agents[TENANT][5]["queue"] == "support"
+        assert handler._agents[TENANT][5]["queue"] == "support"
 
         handler._queue_member_removed(_member_removed_event("support"))
-        assert bus_consume.agents[TENANT][5]["queue"] == "sales"
+        assert handler._agents[TENANT][5]["queue"] == "sales"
 
         # Fully logged out: ``queue`` keeps the last known name (back-compat,
         # never reset to False); ``is_logged`` / ``queues`` convey the logout.
         handler._queue_member_removed(_member_removed_event("sales"))
-        assert bus_consume.agents[TENANT][5]["queue"] == "sales"
-        assert bus_consume.agents[TENANT][5]["is_logged"] is False
-        assert bus_consume.agents[TENANT][5]["queues"] == []
+        assert handler._agents[TENANT][5]["queue"] == "sales"
+        assert handler._agents[TENANT][5]["is_logged"] is False
+        assert handler._agents[TENANT][5]["queues"] == []
 
     def test_pause_in_one_queue_among_two_sets_paused(self, handler):
-        self._logged_agent(["support", "sales"])
+        self._logged_agent(handler, ["support", "sales"])
 
         handler._queue_member_pause(_member_pause_event("sales", paused="1"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["paused_queues"] == ["sales"]
         assert agent["is_paused"] is True
         assert agent["paused_at"] != ""
 
     def test_unpause_one_of_two_paused_queues_stays_paused(self, handler):
-        agent = self._logged_agent(["support", "sales"])
+        agent = self._logged_agent(handler, ["support", "sales"])
         agent["paused_queues"] = ["support", "sales"]
         agent["is_paused"] = True
         agent["paused_at"] = "2026-06-17T12:15:00.000000"
 
         handler._queue_member_pause(_member_pause_event("support", paused="0"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["paused_queues"] == ["sales"]
         assert agent["is_paused"] is True
         assert agent["paused_at"] == "2026-06-17T12:15:00.000000"
 
     def test_unpause_last_queue_clears_paused(self, handler):
-        agent = self._logged_agent(["support"])
+        agent = self._logged_agent(handler, ["support"])
         agent["paused_queues"] = ["support"]
         agent["is_paused"] = True
         agent["paused_at"] = "2026-06-17T12:15:00.000000"
 
         handler._queue_member_pause(_member_pause_event("support", paused="0"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["paused_queues"] == []
         assert agent["is_paused"] is False
         assert agent["paused_at"] == ""
 
     def test_duplicate_added_event_is_idempotent(self, handler):
-        self._logged_agent(["support"])
+        self._logged_agent(handler, ["support"])
 
         handler._queue_member_added(_member_added_event("support"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == ["support"]
 
     def test_duplicate_pause_event_is_idempotent(self, handler):
-        agent = self._logged_agent(["support"])
+        agent = self._logged_agent(handler, ["support"])
         agent["paused_queues"] = ["support"]
         agent["is_paused"] = True
         agent["paused_at"] = "2026-06-17T12:15:00.000000"
 
         handler._queue_member_pause(_member_pause_event("support", paused="1"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["paused_queues"] == ["support"]
         # Already paused: the first-pause timestamp must be preserved.
         assert agent["paused_at"] == "2026-06-17T12:15:00.000000"
@@ -658,11 +669,11 @@ class TestMultiQueueMembership:
     def test_pause_in_non_member_queue_is_ignored(self, handler):
         # Agent is a member of "support" only; a pause for "sales" is dropped to
         # keep the invariant paused_queues ⊆ queues.
-        self._logged_agent(["support"])
+        self._logged_agent(handler, ["support"])
 
         handler._queue_member_pause(_member_pause_event("sales", paused="1"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["paused_queues"] == []
         assert agent["is_paused"] is False
 
@@ -672,12 +683,12 @@ class TestMultiQueueMembership:
         # A removal referencing a queue we are not tracking is a no-op, but it
         # may signal drift between the agentd bootstrap names and the live
         # event names, so it must be logged loudly rather than silently ignored.
-        self._logged_agent(["support"])
+        self._logged_agent(handler, ["support"])
 
         with caplog.at_level(logging.WARNING, logger="wazo_calld_queue.bus_consume"):
             handler._queue_member_removed(_member_removed_event("sales"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == ["support"]
         assert agent["is_logged"] is True
         assert "not in tracked membership" in caplog.text
@@ -685,12 +696,12 @@ class TestMultiQueueMembership:
     def test_pause_after_removed_does_not_resurrect_membership(self, handler):
         # Removed then a stray Pause for the same queue: the agent is logged out
         # and must not be reported as paused.
-        self._logged_agent(["support"])
+        self._logged_agent(handler, ["support"])
 
         handler._queue_member_removed(_member_removed_event("support"))
         handler._queue_member_pause(_member_pause_event("support", paused="1"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == []
         assert agent["paused_queues"] == []
         assert agent["is_logged"] is False
@@ -708,8 +719,8 @@ class TestBootstrapTimestamps:
     leaving the field empty forever.
     """
 
-    def _bootstrapped_agent(self, queues, paused_queues=None):
-        bus_consume.agents[TENANT] = {
+    def _bootstrapped_agent(self, handler, queues, paused_queues=None):
+        handler._agents[TENANT] = {
             5: {
                 "id": 5,
                 "number": "1001",
@@ -730,23 +741,23 @@ class TestBootstrapTimestamps:
                 "talked_with_name": "",
             }
         }
-        return bus_consume.agents[TENANT][5]
+        return handler._agents[TENANT][5]
 
     def test_member_added_backfills_logged_at_after_bootstrap(self, handler, frozen_now):
-        self._bootstrapped_agent(["support"])
+        self._bootstrapped_agent(handler, ["support"])
 
         handler._queue_member_added(_member_added_event("support"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == ["support"]
         assert agent["logged_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
     def test_member_pause_backfills_paused_at_after_bootstrap(self, handler, frozen_now):
-        self._bootstrapped_agent(["support"], paused_queues=["support"])
+        self._bootstrapped_agent(handler, ["support"], paused_queues=["support"])
 
         handler._queue_member_pause(_member_pause_event("support", paused="1"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["paused_queues"] == ["support"]
         assert agent["paused_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
@@ -800,7 +811,7 @@ class TestLegacyQueueFieldBackCompat:
         assert result[1]["is_logged"] is False
 
     def test_queue_not_reset_to_false_on_full_logout(self, handler):
-        bus_consume.agents[TENANT] = {
+        handler._agents[TENANT] = {
             5: bus_consume._build_agent_state(
                 5, "1001", "John Doe", ["support"], [], home_queue="support"
             )
@@ -808,7 +819,7 @@ class TestLegacyQueueFieldBackCompat:
 
         handler._queue_member_removed(_member_removed_event("support"))
 
-        agent = bus_consume.agents[TENANT][5]
+        agent = handler._agents[TENANT][5]
         assert agent["queues"] == []
         assert agent["is_logged"] is False
         assert agent["queue"] == "support"  # NOT False
@@ -855,8 +866,8 @@ class TestBuildAgentState:
 class TestMalformedMemberEvents:
     """A membership event missing a required field is dropped, not crashed on."""
 
-    def _seed_agent(self, queues):
-        bus_consume.agents[TENANT] = {
+    def _seed_agent(self, handler, queues):
+        handler._agents[TENANT] = {
             5: {
                 "id": 5,
                 "number": "1001",
@@ -871,7 +882,7 @@ class TestMalformedMemberEvents:
 
     @pytest.mark.parametrize("event_type", ["QueueMemberAdded", "QueueMemberRemoved"])
     def test_member_event_without_queue_is_dropped(self, handler, event_type):
-        self._seed_agent(["support"])
+        self._seed_agent(handler, ["support"])
         event = {
             "Event": event_type,
             "Membership": "dynamic",
@@ -884,11 +895,11 @@ class TestMalformedMemberEvents:
         # Must not raise (no KeyError) and must leave existing state untouched.
         handler._agents_status(event, TENANT)
 
-        assert bus_consume.agents[TENANT][5]["queues"] == ["support"]
+        assert handler._agents[TENANT][5]["queues"] == ["support"]
         handler.bus_publisher.publish.assert_not_called()
 
     def test_pause_event_without_paused_is_dropped(self, handler):
-        self._seed_agent(["support"])
+        self._seed_agent(handler, ["support"])
         event = {
             "Event": "QueueMemberPause",
             "Membership": "dynamic",
@@ -900,5 +911,175 @@ class TestMalformedMemberEvents:
 
         handler._agents_status(event, TENANT)
 
-        assert bus_consume.agents[TENANT][5]["paused_queues"] == []
+        assert handler._agents[TENANT][5]["paused_queues"] == []
         handler.bus_publisher.publish.assert_not_called()
+
+
+class TestThreadSafety:
+    """The bus consumer thread and the REST worker threads share the same
+    in-memory state, so concurrent access must be serialised by ``_lock``.
+
+    Without the lock, the ``QueueCallerLeave`` loop iterating the tenant's agent
+    dict while another thread inserts a new agent raises
+    ``RuntimeError: dictionary changed size during iteration`` (and can corrupt
+    the counters). This test hammers both paths concurrently and asserts neither
+    thread raises.
+    """
+
+    def _caller_leave_event(self):
+        # ConnectedLineNum is a real agent number so the full dict is iterated
+        # (no early break), maximising the window for a concurrent insert.
+        return {
+            "Event": "QueueCallerLeave",
+            "ConnectedLineNum": "9999",  # never matches -> iterate everything
+            "CallerIDNum": "2000",
+            "CallerIDName": "Bob",
+        }
+
+    def _member_added_event(self, agent_id):
+        return {
+            "Event": "QueueMemberAdded",
+            "Membership": "dynamic",
+            "Interface": f"Local/id-{agent_id}@agentcallback",
+            "MemberName": f"Agent/{1000 + agent_id}",
+            "Queue": "support",
+            "StateInterface": f"Local/id-{agent_id}@agentcallback",
+        }
+
+    def test_concurrent_read_and_insert_do_not_corrupt_state(self, handler):
+        handler.confd.agents.get.return_value = {
+            "firstname": "New",
+            "lastname": "Agent",
+            "queues": [],
+        }
+        # Seed the tenant so the reader has a dict to iterate from the start.
+        handler._agents[TENANT] = {
+            5: _build_seed_agent(5, "1001", ["support"]),
+        }
+
+        iterations = 300
+        errors = []
+        start = threading.Barrier(2)
+
+        def reader():
+            start.wait()
+            try:
+                for _ in range(iterations):
+                    handler._agents_status(self._caller_leave_event(), TENANT)
+            except Exception as exc:  # pragma: no cover - failure path
+                errors.append(("reader", exc))
+
+        def writer():
+            start.wait()
+            try:
+                for i in range(iterations):
+                    handler._agents_status(
+                        self._member_added_event(100 + i), TENANT
+                    )
+            except Exception as exc:  # pragma: no cover - failure path
+                errors.append(("writer", exc))
+
+        threads = [threading.Thread(target=reader), threading.Thread(target=writer)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        # Every agent the writer logged in is present and fully formed.
+        assert len(handler._agents[TENANT]) == iterations + 1
+        for state in handler._agents[TENANT].values():
+            assert state["queues"] == ["support"] or state["id"] == 5
+
+    def test_concurrent_livestats_counters_are_consistent(self, handler):
+        # Two threads driving join/leave on the same queue must not lose updates
+        # or trip over the shared ``waiting_calls`` list.
+        iterations = 300
+        errors = []
+        start = threading.Barrier(2)
+
+        def joiner():
+            start.wait()
+            try:
+                for i in range(iterations):
+                    handler._livestats(_join_event(f"j-{i}", count="1"), TENANT)
+            except Exception as exc:  # pragma: no cover - failure path
+                errors.append(("joiner", exc))
+
+        def leaver():
+            start.wait()
+            try:
+                for i in range(iterations):
+                    handler._livestats(_leave_event(f"j-{i}"), TENANT)
+            except Exception as exc:  # pragma: no cover - failure path
+                errors.append(("leaver", exc))
+
+        threads = [threading.Thread(target=joiner), threading.Thread(target=leaver)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        stats = handler._stats["support"]
+        # Every leave increments received; counters stay coherent (no lost +=).
+        assert stats["received"] == iterations
+        assert stats["answered"] == iterations
+
+    def test_state_methods_are_mutually_exclusive(self, handler):
+        """Deterministic proof that ``_lock`` serialises state access.
+
+        While a REST worker holds the lock inside ``get_agents_status`` (modelled
+        by a blocking ``confd.agents.list`` — the real call releases the GIL on
+        network I/O), the bus consumer thread must not be able to run
+        ``_livestats`` concurrently. Without the lock this assertion fails
+        because the second thread runs immediately.
+        """
+        entered = threading.Event()
+        other_done = threading.Event()
+
+        def slow_list(**kwargs):
+            # We are inside get_agents_status, holding the lock. Let the other
+            # thread attempt its (lock-guarded) call and assert it cannot finish
+            # while we still hold the lock.
+            entered.set()
+            assert not other_done.wait(timeout=0.2), (
+                "a second thread mutated state while get_agents_status held the lock"
+            )
+            return {"items": []}
+
+        handler.confd.agents.list.side_effect = slow_list
+        handler.agentd.agents.get_agent_statuses.return_value = []
+
+        def contender():
+            entered.wait(timeout=1.0)
+            handler._livestats(_join_event("c-1", count="1"), TENANT)
+            other_done.set()
+
+        thread = threading.Thread(target=contender)
+        thread.start()
+        handler.get_agents_status(TENANT)
+        thread.join(timeout=1.0)
+
+        assert other_done.is_set()  # contender eventually ran once lock released
+
+
+def _build_seed_agent(agent_id, number, queues):
+    return {
+        "id": agent_id,
+        "number": number,
+        "fullname": "Seed Agent",
+        "queue": queues[0] if queues else False,
+        "queues": list(queues),
+        "paused_queues": [],
+        "is_logged": bool(queues),
+        "is_paused": False,
+        "is_offline": False,
+        "is_talking": False,
+        "is_ringing": False,
+        "logged_at": "",
+        "paused_at": "",
+        "talked_at": "",
+        "talked_with_number": "",
+        "talked_with_name": "",
+    }

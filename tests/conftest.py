@@ -92,18 +92,7 @@ _install_wazo_bus_stub()
 _install_wazo_calld_stub()
 
 # Imported only after the stub is in place.
-from wazo_calld_queue import bus_consume  # noqa: E402
 from wazo_calld_queue.bus_consume import QueuesBusEventHandler  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def reset_module_state():
-    """Reset the module-level ``stats`` / ``agents`` caches around each test."""
-    bus_consume.stats.clear()
-    bus_consume.agents.clear()
-    yield
-    bus_consume.stats.clear()
-    bus_consume.agents.clear()
 
 
 @pytest.fixture
