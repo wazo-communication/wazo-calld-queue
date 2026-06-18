@@ -627,3 +627,138 @@ class TestMultiQueueMembership:
         assert agent["paused_queues"] == []
         assert agent["is_paused"] is False
         assert agent["paused_at"] == ""
+
+    def test_duplicate_added_event_is_idempotent(self, handler):
+        self._logged_agent(["support"])
+
+        handler._queue_member_added(_member_added_event("support"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == ["support"]
+
+    def test_duplicate_pause_event_is_idempotent(self, handler):
+        agent = self._logged_agent(["support"])
+        agent["paused_queues"] = ["support"]
+        agent["is_paused"] = True
+        agent["paused_at"] = "2026-06-17T12:15:00.000000"
+
+        handler._queue_member_pause(_member_pause_event("support", paused="1"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["paused_queues"] == ["support"]
+        # Already paused: the first-pause timestamp must be preserved.
+        assert agent["paused_at"] == "2026-06-17T12:15:00.000000"
+
+    def test_pause_in_non_member_queue_is_ignored(self, handler):
+        # Agent is a member of "support" only; a pause for "sales" is dropped to
+        # keep the invariant paused_queues ⊆ queues.
+        self._logged_agent(["support"])
+
+        handler._queue_member_pause(_member_pause_event("sales", paused="1"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["paused_queues"] == []
+        assert agent["is_paused"] is False
+
+    def test_pause_after_removed_does_not_resurrect_membership(self, handler):
+        # Removed then a stray Pause for the same queue: the agent is logged out
+        # and must not be reported as paused.
+        self._logged_agent(["support"])
+
+        handler._queue_member_removed(_member_removed_event("support"))
+        handler._queue_member_pause(_member_pause_event("support", paused="1"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == []
+        assert agent["paused_queues"] == []
+        assert agent["is_logged"] is False
+        assert agent["is_paused"] is False
+
+
+class TestBuildAgentState:
+    def test_seeds_runtime_queues_when_logged(self):
+        state = bus_consume._build_agent_state(
+            1, "1001", "John Doe", ["support", "sales"], is_logged=True, is_paused=False
+        )
+        assert state["queues"] == ["support", "sales"]
+        assert state["queue"] == "support"
+        assert state["is_logged"] is True
+        assert state["paused_queues"] == []
+        assert state["is_paused"] is False
+
+    def test_no_runtime_queues_when_logged_out(self):
+        state = bus_consume._build_agent_state(
+            1, "1001", "John Doe", ["support", "sales"], is_logged=False, is_paused=False
+        )
+        assert state["queues"] == []
+        assert state["queue"] is False
+        assert state["is_logged"] is False
+        assert state["paused_queues"] == []
+
+    def test_paused_queues_seeded_only_when_logged_and_paused(self):
+        state = bus_consume._build_agent_state(
+            1, "1001", "John Doe", ["support", "sales"], is_logged=True, is_paused=True
+        )
+        assert state["paused_queues"] == ["support", "sales"]
+        assert state["is_paused"] is True
+
+    def test_paused_but_logged_out_stays_consistent(self):
+        # is_paused with no runtime membership must not produce a phantom pause.
+        state = bus_consume._build_agent_state(
+            1, "1001", "John Doe", ["support"], is_logged=False, is_paused=True
+        )
+        assert state["queues"] == []
+        assert state["paused_queues"] == []
+        assert state["is_paused"] is False
+
+
+class TestMalformedMemberEvents:
+    """A membership event missing a required field is dropped, not crashed on."""
+
+    def _seed_agent(self, queues):
+        bus_consume.agents[TENANT] = {
+            5: {
+                "id": 5,
+                "number": "1001",
+                "fullname": "John Doe",
+                "queue": queues[0] if queues else False,
+                "queues": list(queues),
+                "paused_queues": [],
+                "is_logged": bool(queues),
+                "is_paused": False,
+            }
+        }
+
+    @pytest.mark.parametrize("event_type", ["QueueMemberAdded", "QueueMemberRemoved"])
+    def test_member_event_without_queue_is_dropped(self, handler, event_type):
+        self._seed_agent(["support"])
+        event = {
+            "Event": event_type,
+            "Membership": "dynamic",
+            "Interface": "Local/id-5@agentcallback",
+            "MemberName": "Agent/1001",
+            # "Queue" intentionally missing
+            "StateInterface": "Local/id-5@agentcallback",
+        }
+
+        # Must not raise (no KeyError) and must leave existing state untouched.
+        handler._agents_status(event, TENANT)
+
+        assert bus_consume.agents[TENANT][5]["queues"] == ["support"]
+        handler.bus_publisher.publish.assert_not_called()
+
+    def test_pause_event_without_paused_is_dropped(self, handler):
+        self._seed_agent(["support"])
+        event = {
+            "Event": "QueueMemberPause",
+            "Membership": "dynamic",
+            "Interface": "Local/id-5@agentcallback",
+            "MemberName": "Agent/1001",
+            "Queue": "support",
+            # "Paused" intentionally missing
+        }
+
+        handler._agents_status(event, TENANT)
+
+        assert bus_consume.agents[TENANT][5]["paused_queues"] == []
+        handler.bus_publisher.publish.assert_not_called()

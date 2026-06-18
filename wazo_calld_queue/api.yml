@@ -190,14 +190,19 @@ definitions:
         description: Whether the agent is paused in at least one queue
         type: boolean
       is_ringing:
-        description: Is ringing
+        description: Whether the agent's device is currently ringing
         type: boolean
       is_talking:
-        description: Is talking
+        description: Whether the agent is currently on a call
         type: boolean
       is_offline:
         description: Whether the agent device is offline (websocket down)
         type: boolean
+      interface:
+        description: >-
+          Asterisk state interface backing the agent's runtime membership
+          (set when the agent joins a queue).
+        type: string
       logged_at:
         description: Login time of the agent
         type: string
@@ -205,13 +210,13 @@ definitions:
         description: Time of the first active pause
         type: string
       talked_at:
-        description: Talked at
+        description: Start time of the agent's current call
         type: string
       talked_with_number:
-        description: Phone number of the caller
+        description: Phone number of the current caller
         type: string
       talked_with_name:
-        description: Name of the caller
+        description: Name of the current caller
         type: string
   QueueAddMember:
     type: object

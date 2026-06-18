@@ -30,6 +30,15 @@ logger = logging.getLogger(__name__)
 AGENT_ID_FROM_IFACE = re.compile(r"^Local/id-(\d+)@agentcallback$")
 MEMBER_NUM_FROM_AGENT = re.compile(r"^Agent/(\d+)$")
 
+# Fields required to safely process each membership-mutating event. A malformed
+# event missing one of these is dropped (and logged) rather than raising a
+# KeyError that would crash the handler and drop the rest of the batch.
+_REQUIRED_EVENT_FIELDS = {
+    "QueueMemberAdded": ("Membership", "Interface", "MemberName", "Queue", "StateInterface"),
+    "QueueMemberRemoved": ("Membership", "Interface", "MemberName", "Queue"),
+    "QueueMemberPause": ("Membership", "Interface", "MemberName", "Queue", "Paused"),
+}
+
 
 def _sync_derived(state):
     """Recompute fields derived from the queue membership sets.
@@ -299,6 +308,18 @@ class QueuesBusEventHandler(object):
     def _agents_status(self, event, tenant_uuid):
         agent = 0
 
+        required = _REQUIRED_EVENT_FIELDS.get(event.get("Event"))
+        if required:
+            missing = [field for field in required if field not in event]
+            if missing:
+                logger.warning(
+                    "Dropping malformed %s event for tenant %s: missing fields %s",
+                    event.get("Event"),
+                    tenant_uuid,
+                    missing,
+                )
+                return
+
         # Check if agents for this tenant exists
         if event["Event"] != "QueueCallerLeave" and event["Membership"] == "dynamic":
             interface = AGENT_ID_FROM_IFACE.match(event["Interface"])
@@ -390,20 +411,35 @@ class QueuesBusEventHandler(object):
             _sync_derived(state)
 
         if event["Event"] == "QueueMemberPause" and event["Membership"] == "dynamic":
-            # Handle pause, tracked per queue (Asterisk pauses per membership)
-            if not agents[tenant_uuid].get(agent):
-                agents[tenant_uuid].update({agent: {}})
+            # Handle pause, tracked per queue (Asterisk pauses per membership).
+            # The agent is always materialised by the membership block above
+            # (add_agent), so a fully-formed state dict is guaranteed here.
             state = agents[tenant_uuid][agent]
+            state.setdefault("queues", [])
             state.setdefault("paused_queues", [])
             was_paused = bool(state["paused_queues"])
             if event["Paused"] == "1":
-                if event["Queue"] not in state["paused_queues"]:
-                    state["paused_queues"].append(event["Queue"])
-                if not was_paused:
-                    # LastPause: set on first pause, kept while any queue paused
-                    state["paused_at"] = datetime.datetime.now().strftime(
-                        "%Y-%m-%dT%H:%M:%S.%f"
+                # Keep the invariant paused_queues ⊆ queues: never report an
+                # agent as paused in a queue it is not a (runtime) member of.
+                # This drops stray pauses that arrive after a QueueMemberRemoved
+                # for the same queue, which would otherwise leave a logged-out
+                # agent flagged as paused.
+                if event["Queue"] not in state["queues"]:
+                    logger.warning(
+                        "Ignoring pause for tenant %s agent %s in queue %s: "
+                        "not a member of that queue",
+                        tenant_uuid,
+                        agent,
+                        event["Queue"],
                     )
+                else:
+                    if event["Queue"] not in state["paused_queues"]:
+                        state["paused_queues"].append(event["Queue"])
+                    if not was_paused:
+                        # LastPause: set on first pause, kept while any queue paused
+                        state["paused_at"] = datetime.datetime.now().strftime(
+                            "%Y-%m-%dT%H:%M:%S.%f"
+                        )
             else:
                 if event["Queue"] in state["paused_queues"]:
                     state["paused_queues"].remove(event["Queue"])

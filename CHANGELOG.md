@@ -14,14 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/FRONTEND_INTEGRATION.md`: a frontend integration guide covering REST and
   event semantics, the multi-queue agent model, and client merge logic.
 - Sync the `QueueAgentsStatus` Swagger definition with the real payload (add the
-  multi-queue and previously undocumented fields; fix the `is_loggued` /
-  `loggued_at` typos to `is_logged` / `logged_at`).
+  multi-queue and previously undocumented fields including `interface`; sharpen
+  the `is_ringing` / `is_talking` / `talked_at` descriptions; fix the
+  `is_loggued` / `loggued_at` typos to `is_logged` / `logged_at`).
 
 ### Fixed
 - An agent removed from one queue is no longer wrongly reported as fully logged
   out while still a member of other queues.
 - Pausing or unpausing in one queue no longer flips the agent's global pause
   state for all queues.
+- Malformed `QueueMember*` events missing a required field (e.g. `Queue`) are
+  now dropped with a warning instead of raising and aborting the event batch.
+- A pause event for a queue the agent is not a member of is now ignored,
+  preventing a logged-out agent from being reported as paused (keeps the
+  `paused_queues` ⊆ `queues` invariant).
 
 ## [2.1.0] - 2026-06-18
 
