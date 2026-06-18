@@ -306,11 +306,14 @@ function renderAgent(a) {
 
 ## 9. Caveats & edge cases
 
-- **Initial state is best-effort.** On first build from confd, the server does
-  not know per-queue pause or per-queue membership, so it seeds `queues` from
-  the agent's configured queues (only when logged in) and mirrors pause across
-  them. Live events correct this within moments. Don't hard-fail on a brief
-  inconsistency right after startup.
+- **Initial state reflects live per-queue status.** On first build the server
+  reads each agent's current per-queue `logged` / `paused` flags from
+  `wazo-agentd`, so `queues` and `paused_queues` are the queues the agent is
+  actually logged into / paused in — not every configured queue. The only
+  fields it cannot recover at bootstrap are the session timestamps
+  (`logged_at` / `paused_at`), which stay empty until the next live event for
+  that agent (agentd exposes no login/pause time). Treat an empty timestamp as
+  "unknown", not "just now".
 - **`talked_with_*` is populated on `QueueCallerLeave`** (when a caller is
   connected to the agent) and cleared when the call ends.
 - **`queue: false`** means the agent is in no queue (logged out). Handle the

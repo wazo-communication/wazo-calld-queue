@@ -63,24 +63,40 @@ def _agent_fullname(info):
     return fullname
 
 
-def _queue_names(info):
-    try:
-        return [q.get("name") for q in info["queues"] if q.get("name")]
-    except (KeyError, TypeError):
-        return []
+def _membership_from_status(status):
+    """Derive runtime ``(queues, paused_queues)`` from a live agentd status.
+
+    agentd reports every configured queue with its current per-queue
+    ``logged`` / ``paused`` flags, so the runtime membership is exactly the
+    queues flagged ``logged`` (resp. ``paused``) — not every configured queue.
+    This keeps a multi-queue agent's bootstrap snapshot accurate instead of
+    over-reporting membership until the next live event corrects it.
+    """
+    queues = []
+    paused_queues = []
+    for queue in getattr(status, "queues", None) or []:
+        name = queue.get("name")
+        if not name:
+            continue
+        if queue.get("logged"):
+            queues.append(name)
+        if queue.get("paused"):
+            paused_queues.append(name)
+    return queues, paused_queues
 
 
-def _build_agent_state(
-    agent_id, number, fullname, configured_queues, is_logged, is_paused
-):
+def _build_agent_state(agent_id, number, fullname, queues=None, paused_queues=None):
     """Build a fresh agent state dict.
 
-    ``configured_queues`` is the confd-configured membership. The runtime
-    ``queues`` set is seeded from it only when the agent is logged in, so the
-    derived flags stay consistent; live events keep it up to date afterwards.
+    ``queues`` is the runtime membership (the queues the agent is currently
+    logged into) and ``paused_queues`` the queues it is paused in — both
+    sourced from the live agentd per-queue status at bootstrap. The
+    ``paused_queues ⊆ queues`` invariant is enforced here so a stale pause
+    never produces a phantom paused flag. ``queue`` / ``is_logged`` /
+    ``is_paused`` are derived from these sets via ``_sync_derived``.
     """
-    runtime_queues = list(configured_queues) if is_logged else []
-    paused_queues = list(runtime_queues) if is_paused else []
+    runtime_queues = list(queues or [])
+    paused_queues = [q for q in (paused_queues or []) if q in runtime_queues]
     state = {
         "id": agent_id,
         "number": number,
@@ -242,28 +258,19 @@ class QueuesBusEventHandler(object):
             agentStatus = self.agentd.agents.get_agent_statuses(tenant_uuid=tenant_uuid)
 
             for agent in agentList["items"]:
-                status = [
-                    x.__dict__
-                    for x in agentStatus
-                    if x.__dict__.get("id") == agent["id"]
-                ]
-                if status and status[0].get("logged") is not None:
-                    agent_islogged = status[0].get("logged")
-                else:
-                    agent_islogged = False
-                if status and status[0].get("paused") is not None:
-                    agent_ispaused = status[0].get("paused")
-                else:
-                    agent_ispaused = False
+                status = next(
+                    (s for s in agentStatus if getattr(s, "id", None) == agent["id"]),
+                    None,
+                )
+                runtime_queues, paused_queues = _membership_from_status(status)
 
                 if not agents[tenant_uuid].get(agent["id"]):
                     agents[tenant_uuid][agent["id"]] = _build_agent_state(
                         agent["id"],
                         agent["number"],
                         _agent_fullname(agent),
-                        _queue_names(agent),
-                        agent_islogged,
-                        agent_ispaused,
+                        runtime_queues,
+                        paused_queues,
                     )
         logger.debug("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
         return agents[tenant_uuid]
@@ -274,14 +281,11 @@ class QueuesBusEventHandler(object):
                 resource_or_id=agent, tenant_uuid=tenant_uuid
             )
             # Not yet runtime-logged: the triggering membership event populates
-            # ``queues`` right after this call.
+            # ``queues`` right after this call, so seed with empty membership.
             agents[tenant_uuid][agent] = _build_agent_state(
                 agent,
                 member,
                 _agent_fullname(agentInfo),
-                _queue_names(agentInfo),
-                is_logged=False,
-                is_paused=False,
             )
 
     def get_stats(self, name):
