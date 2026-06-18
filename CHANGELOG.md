@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-06-18
+
+### Added
+- Support agents belonging to multiple queues: each agent now tracks runtime
+  membership (`queues`) and per-queue pause (`paused_queues`); these are exposed
+  alongside the existing `queue` field in REST and bus payloads.
+- `docs/FRONTEND_INTEGRATION.md`: a frontend integration guide covering REST and
+  event semantics, the multi-queue agent model, and client merge logic.
+- Sync the `QueueAgentsStatus` Swagger definition with the real payload (add the
+  multi-queue and previously undocumented fields; fix the `is_loggued` /
+  `loggued_at` typos to `is_logged` / `logged_at`).
+
+### Fixed
+- An agent removed from one queue is no longer wrongly reported as fully logged
+  out while still a member of other queues.
+- Pausing or unpausing in one queue no longer flips the agent's global pause
+  state for all queues.
+
 ## [2.1.0] - 2026-06-18
 
 ### Changed
@@ -59,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release: Queue REST API and bus events for Asterisk-based queue management.
 
+[2.2.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.0.0...v2.0.1

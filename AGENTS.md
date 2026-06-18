@@ -10,6 +10,8 @@ Version source: `wazo/plugin.yml`.
 - `wazo_call_logd_queue/`: `wazo-call-logd` plugin. Persists Asterisk `queue_log` entries to the database and publishes bus events.
 - `etc/`: deployed configuration, including Asterisk dialplan, ACL, and plugin activation.
 - `tests/`: pytest unit tests. `conftest.py` stubs `wazo_bus` so `bus_consume` imports without the full Wazo stack.
+- `wazo_calld_queue/api.yml`: Swagger 2.0 fragment (field-level REST reference, merged into the global `wazo-calld` spec).
+- `docs/FRONTEND_INTEGRATION.md`: integration guide for frontend clients — REST/event semantics, the multi-queue agent model, and snapshot+subscribe merge logic.
 
 ## Core module map (`wazo_calld_queue/`)
 
@@ -24,6 +26,10 @@ Version source: `wazo/plugin.yml`.
 - Map REST API calls to Asterisk Manager Interface actions.
 - Consume `QueueCaller*` and `QueueMember*` bus events in `bus_consume.py`.
 - Maintain global in-memory dicts: `stats` and `agents`.
+- An agent may serve several queues: each `agents[tenant][id]` tracks runtime
+  membership in `queues` and per-queue pause in `paused_queues`; `queue`,
+  `is_logged`, and `is_paused` are derived from these via `_sync_derived` and
+  never written directly.
 - Republish enriched events to the front-end websocket.
 - Treat in-memory state as non-shared across workers and non-persistent across restarts.
 - Resolve tenant UUID from `WAZO_TENANT_UUID` or confd via `_extract_tenant_uuid`.
