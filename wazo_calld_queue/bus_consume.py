@@ -216,7 +216,7 @@ class QueuesBusEventHandler(object):
                             }
                         }
                     )
-        print(agents[tenant_uuid])
+        logger.debug("agents status for tenant %s: %s", tenant_uuid, agents[tenant_uuid])
         return agents[tenant_uuid]
 
     def add_agent(self, tenant_uuid, agent, member):
@@ -253,8 +253,6 @@ class QueuesBusEventHandler(object):
                     }
                 }
             )
-        # print(agents[tenant_uuid].get(agent))
-        # print(agents[tenant_uuid])
 
     def get_stats(self, name):
         # If the queue stats doesnot exist, create the object with default values || Reset if day is different
@@ -402,9 +400,11 @@ class QueuesBusEventHandler(object):
                 stats[name]["awr"] = math.ceil(
                     stats[name]["answered"] / stats[name]["received"] * 100
                 )
-            for i in range(len(stats[name]["waiting_calls"])):
-                if stats[name]["waiting_calls"][i]["uniqueid"] == event["Uniqueid"]:
-                    stats[name]["waiting_calls"].pop(i)
+            stats[name]["waiting_calls"] = [
+                call
+                for call in stats[name]["waiting_calls"]
+                if call["uniqueid"] != event["Uniqueid"]
+            ]
         elif queue_event == "QueueCallerLeave":
             stats[name]["count"] = int(event["Count"])
             stats[name]["updated_at"] = datetime.datetime.now().day
@@ -414,9 +414,11 @@ class QueuesBusEventHandler(object):
                 stats[name]["awr"] = math.ceil(
                     stats[name]["answered"] / stats[name]["received"] * 100
                 )
-            for i in range(len(stats[name]["waiting_calls"])):
-                if stats[name]["waiting_calls"][i]["uniqueid"] == event["Uniqueid"]:
-                    stats[name]["waiting_calls"].pop(i)
+            stats[name]["waiting_calls"] = [
+                call
+                for call in stats[name]["waiting_calls"]
+                if call["uniqueid"] != event["Uniqueid"]
+            ]
 
         # Set color depending on limit value
         stats[name]["count_color"] = "green"

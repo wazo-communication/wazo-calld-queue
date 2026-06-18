@@ -38,8 +38,7 @@ class QueueSchema(Schema):
     max = fields.Integer()
     calls = fields.Integer()
     members = fields.List(StrictDict(key_field=fields.String(required=True, validate=Length(min=1)),
-                                     value_field=fields.String(required=True, validate=Length(min=1)),
-                                     missing=dict))
+                                     value_field=fields.String(required=True, validate=Length(min=1))))
 
     class Meta:
         strict = True

@@ -1,9 +1,9 @@
 name: wazo-calld-queue
-namespace: mwolff44
-version: 2.0.2
+namespace: wazo
+version: 2.1.0
 author: Sylvain Boily & Mathias WOLFF
 display_name: Queue API and events
-min_wazo_version: 25.15
+min_wazo_version: 26.06
 tags:
   - queue
-homepage: https://github.com/mwolff44/wazo-calld-queue
+homepage: https://github.com/wazo-communication/wazo-calld-queue
