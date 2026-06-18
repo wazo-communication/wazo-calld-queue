@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is therefore accurate immediately, rather than over-reporting membership until
   the next live event. The `paused_queues` ⊆ `queues` invariant is enforced at
   build time.
+- A `QueueMemberRemoved` that references a queue not in the agent's tracked
+  membership is now logged at `WARNING` (previously a silent no-op). This
+  surfaces any drift between the queue name agentd reports at bootstrap and the
+  name carried by live Asterisk events, which would otherwise silently leave an
+  agent flagged as a member of a queue they have left. The matching pause path
+  already logged this case.
 
 ### Notes
 - `logged_at` / `paused_at` remain empty after a mid-session bootstrap until the

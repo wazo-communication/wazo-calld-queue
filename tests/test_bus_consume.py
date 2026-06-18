@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0+
 
 import datetime
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -657,6 +658,22 @@ class TestMultiQueueMembership:
         agent = bus_consume.agents[TENANT][5]
         assert agent["paused_queues"] == []
         assert agent["is_paused"] is False
+
+    def test_member_removed_for_untracked_queue_warns_and_is_noop(
+        self, handler, caplog
+    ):
+        # A removal referencing a queue we are not tracking is a no-op, but it
+        # may signal drift between the agentd bootstrap names and the live
+        # event names, so it must be logged loudly rather than silently ignored.
+        self._logged_agent(["support"])
+
+        with caplog.at_level(logging.WARNING, logger="wazo_calld_queue.bus_consume"):
+            handler._queue_member_removed(_member_removed_event("sales"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == ["support"]
+        assert agent["is_logged"] is True
+        assert "not in tracked membership" in caplog.text
 
     def test_pause_after_removed_does_not_resurrect_membership(self, handler):
         # Removed then a stray Pause for the same queue: the agent is logged out

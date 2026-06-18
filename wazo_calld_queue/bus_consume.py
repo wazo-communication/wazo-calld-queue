@@ -403,6 +403,21 @@ class QueuesBusEventHandler(object):
             state.setdefault("paused_queues", [])
             if event["Queue"] in state["queues"]:
                 state["queues"].remove(event["Queue"])
+            else:
+                # No-op removal: either a duplicate/late event, or the queue
+                # name in this live event does not match the one agentd
+                # reported at bootstrap. Log it loudly so a silent drift
+                # between the two namespaces is surfaced rather than leaving
+                # the agent wrongly flagged as a member of that queue.
+                logger.warning(
+                    "QueueMemberRemoved for tenant %s agent %s in queue %s: "
+                    "not in tracked membership %s (duplicate event or a "
+                    "queue-name mismatch between agentd bootstrap and events)",
+                    tenant_uuid,
+                    agent,
+                    event["Queue"],
+                    state["queues"],
+                )
             if event["Queue"] in state["paused_queues"]:
                 state["paused_queues"].remove(event["Queue"])
             if not state["queues"]:
