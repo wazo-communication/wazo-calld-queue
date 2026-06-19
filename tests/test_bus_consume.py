@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0+
 
 import datetime
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -227,6 +228,26 @@ class TestExtractTenantUuid:
             handler._extract_tenant_uuid(event)
 
 
+def _agentd_status(agent_id, queues, logged=None, paused=None):
+    """Build an agentd ``_AgentStatus``-shaped object.
+
+    ``queues`` is a list of ``(name, logged, paused)`` tuples mirroring the
+    real agentd payload, where every configured queue is reported with its
+    current per-queue ``logged`` / ``paused`` flags. The top-level ``logged`` /
+    ``paused`` default to the OR of the per-queue flags, as agentd reports them.
+    """
+    queue_dicts = [
+        {"name": name, "logged": q_logged, "paused": q_paused}
+        for (name, q_logged, q_paused) in queues
+    ]
+    return SimpleNamespace(
+        id=agent_id,
+        logged=any(q[1] for q in queues) if logged is None else logged,
+        paused=any(q[2] for q in queues) if paused is None else paused,
+        queues=queue_dicts,
+    )
+
+
 class TestGetAgentsStatus:
     def test_builds_agents_dict(self, handler):
         handler.confd.agents.list.return_value = {
@@ -236,19 +257,17 @@ class TestGetAgentsStatus:
                     "firstname": "John",
                     "lastname": "Doe",
                     "number": "1001",
-                    "queues": [{"name": "support"}],
                 },
                 {
                     "id": 2,
                     "firstname": "Jane",
                     "lastname": None,
                     "number": "1002",
-                    "queues": [],
                 },
             ]
         }
         handler.agentd.agents.get_agent_statuses.return_value = [
-            SimpleNamespace(id=1, logged=True, paused=False),
+            _agentd_status(1, [("support", True, False)]),
         ]
 
         result = handler.get_agents_status(TENANT)
@@ -257,88 +276,70 @@ class TestGetAgentsStatus:
         assert result[1]["queue"] == "support"
         assert result[1]["is_logged"] is True
         assert result[1]["is_paused"] is False
-        # lastname None is skipped; empty queues -> False; no status -> defaults
+        # lastname None is skipped; no agentd status -> logged-out defaults
         assert result[2]["fullname"] == "Jane"
         assert result[2]["queue"] is False
         assert result[2]["is_logged"] is False
 
-    def test_collects_all_configured_queues(self, handler):
+    def test_seeds_only_queues_the_agent_is_logged_into(self, handler):
+        # Configured for support+sales but only logged into support: runtime
+        # membership must reflect agentd's per-queue flags, not every
+        # configured queue.
         handler.confd.agents.list.return_value = {
             "items": [
-                {
-                    "id": 1,
-                    "firstname": "John",
-                    "lastname": "Doe",
-                    "number": "1001",
-                    "queues": [{"name": "support"}, {"name": "sales"}],
-                }
+                {"id": 1, "firstname": "John", "lastname": "Doe", "number": "1001"}
             ]
         }
         handler.agentd.agents.get_agent_statuses.return_value = [
-            SimpleNamespace(id=1, logged=True, paused=False),
+            _agentd_status(1, [("support", True, False), ("sales", False, False)]),
         ]
 
         result = handler.get_agents_status(TENANT)
 
-        assert result[1]["queues"] == ["support", "sales"]
+        assert result[1]["queues"] == ["support"]
         assert result[1]["queue"] == "support"
         assert result[1]["is_logged"] is True
 
     def test_queues_empty_when_logged_out(self, handler):
         handler.confd.agents.list.return_value = {
             "items": [
-                {
-                    "id": 1,
-                    "firstname": "John",
-                    "lastname": "Doe",
-                    "number": "1001",
-                    "queues": [{"name": "support"}, {"name": "sales"}],
-                }
+                {"id": 1, "firstname": "John", "lastname": "Doe", "number": "1001"}
             ]
         }
         handler.agentd.agents.get_agent_statuses.return_value = [
-            SimpleNamespace(id=1, logged=False, paused=False),
+            _agentd_status(1, [("support", False, False), ("sales", False, False)]),
         ]
 
         result = handler.get_agents_status(TENANT)
 
-        # Runtime membership stays consistent with the logged-out status.
         assert result[1]["queues"] == []
-        assert result[1]["queue"] is False
+        # Legacy ``queue`` stays a queue-name string for back-compat; use
+        # ``is_logged`` / ``queues`` for connection state.
+        assert result[1]["queue"] == "support"
         assert result[1]["is_logged"] is False
         assert result[1]["paused_queues"] == []
 
-    def test_paused_queues_seeded_when_paused(self, handler):
+    def test_seeds_paused_queues_from_per_queue_flags(self, handler):
+        # Logged into support+sales, paused only in sales.
         handler.confd.agents.list.return_value = {
             "items": [
-                {
-                    "id": 1,
-                    "firstname": "John",
-                    "lastname": "Doe",
-                    "number": "1001",
-                    "queues": [{"name": "support"}, {"name": "sales"}],
-                }
+                {"id": 1, "firstname": "John", "lastname": "Doe", "number": "1001"}
             ]
         }
         handler.agentd.agents.get_agent_statuses.return_value = [
-            SimpleNamespace(id=1, logged=True, paused=True),
+            _agentd_status(1, [("support", True, False), ("sales", True, True)]),
         ]
 
         result = handler.get_agents_status(TENANT)
 
-        assert result[1]["paused_queues"] == ["support", "sales"]
+        assert result[1]["queues"] == ["support", "sales"]
+        assert result[1]["paused_queues"] == ["sales"]
         assert result[1]["is_paused"] is True
 
     def test_result_is_cached(self, handler):
         handler.confd.agents.list.return_value = {
             "items": [
-                {
-                    "id": 1,
-                    "firstname": "A",
-                    "lastname": "B",
-                    "number": "1001",
-                    "queues": [{"name": "support"}],
-                }
+                {"id": 1, "firstname": "A", "lastname": "B", "number": "1001"}
             ]
         }
         handler.agentd.agents.get_agent_statuses.return_value = []
@@ -364,9 +365,10 @@ class TestAddAgent:
         assert agent["id"] == 5
         assert agent["number"] == "1001"
         assert agent["fullname"] == "John Doe"
-        # add_agent starts not-yet-logged: the triggering membership event
-        # populates ``queues`` (and hence the derived ``queue``) right after.
-        assert agent["queue"] is False
+        # add_agent starts not-yet-logged (empty runtime ``queues``) but seeds
+        # the legacy ``queue`` string from the configured queues for back-compat.
+        assert agent["queue"] == "support"
+        assert agent["queues"] == []
         assert agent["is_logged"] is False
 
     def test_initializes_multi_queue(self, handler):
@@ -380,10 +382,10 @@ class TestAddAgent:
         handler.add_agent(TENANT, 5, "1001")
 
         agent = bus_consume.agents[TENANT][5]
-        # add_agent seeds the configured queues but the agent is not yet
-        # runtime-logged, so derived membership starts empty.
+        # Not yet runtime-logged, so derived membership starts empty; the legacy
+        # ``queue`` string is seeded from the first configured queue.
         assert agent["queues"] == []
-        assert agent["queue"] is False
+        assert agent["queue"] == "support"
         assert agent["is_logged"] is False
         assert agent["paused_queues"] == []
 
@@ -589,8 +591,12 @@ class TestMultiQueueMembership:
         handler._queue_member_removed(_member_removed_event("support"))
         assert bus_consume.agents[TENANT][5]["queue"] == "sales"
 
+        # Fully logged out: ``queue`` keeps the last known name (back-compat,
+        # never reset to False); ``is_logged`` / ``queues`` convey the logout.
         handler._queue_member_removed(_member_removed_event("sales"))
-        assert bus_consume.agents[TENANT][5]["queue"] is False
+        assert bus_consume.agents[TENANT][5]["queue"] == "sales"
+        assert bus_consume.agents[TENANT][5]["is_logged"] is False
+        assert bus_consume.agents[TENANT][5]["queues"] == []
 
     def test_pause_in_one_queue_among_two_sets_paused(self, handler):
         self._logged_agent(["support", "sales"])
@@ -659,6 +665,22 @@ class TestMultiQueueMembership:
         agent = bus_consume.agents[TENANT][5]
         assert agent["paused_queues"] == []
         assert agent["is_paused"] is False
+
+    def test_member_removed_for_untracked_queue_warns_and_is_noop(
+        self, handler, caplog
+    ):
+        # A removal referencing a queue we are not tracking is a no-op, but it
+        # may signal drift between the agentd bootstrap names and the live
+        # event names, so it must be logged loudly rather than silently ignored.
+        self._logged_agent(["support"])
+
+        with caplog.at_level(logging.WARNING, logger="wazo_calld_queue.bus_consume"):
+            handler._queue_member_removed(_member_removed_event("sales"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == ["support"]
+        assert agent["is_logged"] is True
+        assert "not in tracked membership" in caplog.text
 
     def test_pause_after_removed_does_not_resurrect_membership(self, handler):
         # Removed then a stray Pause for the same queue: the agent is logged out
@@ -729,37 +751,101 @@ class TestBootstrapTimestamps:
         assert agent["paused_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
+class TestLegacyQueueFieldBackCompat:
+    """The legacy ``queue`` field must stay a queue-name string even when the
+    agent is logged out.
+
+    The pre-multi-queue front (v2.0.2) groups agents by ``agent.queue`` and
+    expects a string; a boolean ``false`` breaks it. Connection state is carried
+    by ``is_logged`` (and the new ``queues``), not by resetting ``queue``.
+    """
+
+    def test_logged_out_agent_keeps_a_queue_name_at_bootstrap(self, handler):
+        handler.confd.agents.list.return_value = {
+            "items": [
+                {"id": 1, "firstname": "John", "lastname": "Doe", "number": "1001"}
+            ]
+        }
+        handler.agentd.agents.get_agent_statuses.return_value = [
+            _agentd_status(1, [("support", False, False), ("sales", False, False)]),
+        ]
+
+        result = handler.get_agents_status(TENANT)
+
+        assert result[1]["queue"] == "support"  # truthy, back-compat
+        assert result[1]["is_logged"] is False
+        assert result[1]["queues"] == []
+
+    def test_home_queue_falls_back_to_confd_when_agentd_has_no_status(self, handler):
+        # agentd returns no status for the agent (e.g. never logged in since
+        # agentd started): the home queue must still come from confd, so a
+        # configured agent keeps a queue-name string rather than ``false``.
+        handler.confd.agents.list.return_value = {
+            "items": [
+                {
+                    "id": 1,
+                    "firstname": "John",
+                    "lastname": "Doe",
+                    "number": "1001",
+                    "queues": [{"name": "support"}, {"name": "sales"}],
+                }
+            ]
+        }
+        handler.agentd.agents.get_agent_statuses.return_value = []
+
+        result = handler.get_agents_status(TENANT)
+
+        assert result[1]["queue"] == "support"
+        assert result[1]["queues"] == []
+        assert result[1]["is_logged"] is False
+
+    def test_queue_not_reset_to_false_on_full_logout(self, handler):
+        bus_consume.agents[TENANT] = {
+            5: bus_consume._build_agent_state(
+                5, "1001", "John Doe", ["support"], [], home_queue="support"
+            )
+        }
+
+        handler._queue_member_removed(_member_removed_event("support"))
+
+        agent = bus_consume.agents[TENANT][5]
+        assert agent["queues"] == []
+        assert agent["is_logged"] is False
+        assert agent["queue"] == "support"  # NOT False
+
+
 class TestBuildAgentState:
-    def test_seeds_runtime_queues_when_logged(self):
+    def test_seeds_runtime_and_paused_queues(self):
         state = bus_consume._build_agent_state(
-            1, "1001", "John Doe", ["support", "sales"], is_logged=True, is_paused=False
+            1, "1001", "John Doe", ["support", "sales"], ["sales"]
         )
         assert state["queues"] == ["support", "sales"]
         assert state["queue"] == "support"
         assert state["is_logged"] is True
-        assert state["paused_queues"] == []
-        assert state["is_paused"] is False
+        assert state["paused_queues"] == ["sales"]
+        assert state["is_paused"] is True
 
-    def test_no_runtime_queues_when_logged_out(self):
-        state = bus_consume._build_agent_state(
-            1, "1001", "John Doe", ["support", "sales"], is_logged=False, is_paused=False
-        )
+    def test_defaults_to_empty_membership(self):
+        state = bus_consume._build_agent_state(1, "1001", "John Doe")
         assert state["queues"] == []
         assert state["queue"] is False
         assert state["is_logged"] is False
         assert state["paused_queues"] == []
+        assert state["is_paused"] is False
 
-    def test_paused_queues_seeded_only_when_logged_and_paused(self):
+    def test_enforces_paused_subset_of_queues(self):
+        # A pause in a queue the agent is not (runtime) a member of must not
+        # produce a phantom paused flag: paused_queues ⊆ queues.
         state = bus_consume._build_agent_state(
-            1, "1001", "John Doe", ["support", "sales"], is_logged=True, is_paused=True
+            1, "1001", "John Doe", ["support"], ["support", "sales"]
         )
-        assert state["paused_queues"] == ["support", "sales"]
+        assert state["queues"] == ["support"]
+        assert state["paused_queues"] == ["support"]
         assert state["is_paused"] is True
 
-    def test_paused_but_logged_out_stays_consistent(self):
-        # is_paused with no runtime membership must not produce a phantom pause.
+    def test_paused_without_membership_stays_consistent(self):
         state = bus_consume._build_agent_state(
-            1, "1001", "John Doe", ["support"], is_logged=False, is_paused=True
+            1, "1001", "John Doe", [], ["support"]
         )
         assert state["queues"] == []
         assert state["paused_queues"] == []

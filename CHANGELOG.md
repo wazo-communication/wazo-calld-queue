@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-06-18
+
+### Changed
+- Internal: `QueueService.livestats` / `agents_status` now delegate to the bus
+  event handler instance (`self.publisher`) instead of calling its methods
+  unbound via the class with `self`. No behaviour change (same clients, same
+  shared state), but it removes a latent `AttributeError` should those handler
+  methods ever use a handler-only attribute.
+
+### Fixed
+- Backward compatibility of the `queue_agents_status` payload with
+  pre-multi-queue clients (v2.0.x). The legacy `queue` field had started being
+  reset to `false` whenever an agent was logged out; clients that group agents
+  by `agent.queue` (expecting a string) then dropped logged-out agents, and the
+  agents did not reappear on reconnect. `queue` now stays a queue-name string
+  across logout (seeded from the agent's configured/home queue, and never reset
+  on the last `QueueMemberRemoved`); connection state is conveyed by `is_logged`
+  and the runtime `queues` set. The multi-queue fields (`queues`,
+  `paused_queues`) are unchanged.
+
+## [2.3.0] - 2026-06-18
+
+### Changed
+- Bootstrap (`GET /queues/agents_status` and worker startup) now seeds an
+  agent's runtime `queues` / `paused_queues` from `wazo-agentd`'s live per-queue
+  `logged` / `paused` flags, instead of assuming membership in *all* configured
+  queues whenever the agent is logged in. A multi-queue agent's initial snapshot
+  is therefore accurate immediately, rather than over-reporting membership until
+  the next live event. The `paused_queues` ⊆ `queues` invariant is enforced at
+  build time.
+- A `QueueMemberRemoved` that references a queue not in the agent's tracked
+  membership is now logged at `WARNING` (previously a silent no-op). This
+  surfaces any drift between the queue name agentd reports at bootstrap and the
+  name carried by live Asterisk events, which would otherwise silently leave an
+  agent flagged as a member of a queue they have left. The matching pause path
+  already logged this case.
+
+### Notes
+- `logged_at` / `paused_at` remain empty after a mid-session bootstrap until the
+  next live membership/pause event: `wazo-agentd` exposes no login/pause
+  timestamp, so an honest "unknown" is preferred over an approximate value.
+
 ## [2.2.0] - 2026-06-18
 
 ### Added
