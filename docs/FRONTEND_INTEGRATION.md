@@ -16,17 +16,22 @@ explains the **semantics** you must respect to implement a correct client.
 
 ## 1. Mental model
 
-The server keeps **in-memory, per-worker, non-persistent** state:
+The server keeps **in-memory, non-persistent** state:
 
 - `stats[queue_name]` — live counters per queue.
 - `agents[tenant_uuid][agent_id]` — live status per agent.
 
+This state lives in a single `wazo-calld` process (a cheroot thread pool), so
+REST calls and the event stream read the **same** state — there is no
+cross-worker divergence. It is, however, **not durable**.
+
 Two consequences for the client:
 
 1. **Never treat the server as a durable source of truth.** State is rebuilt
-   from Asterisk events after a restart and is **not shared across workers**, so
-   two REST calls may hit different workers with slightly different snapshots.
-   Trust the live event stream, not repeated polling.
+   from Asterisk events / agentd after a restart, so it can be incomplete right
+   after a reload (e.g. session timestamps are empty until the next live event,
+   and `stats` counters restart from zero). Trust the live event stream, not
+   repeated polling.
 2. The correct pattern is **snapshot + subscribe**:
    1. `GET` the REST endpoint once to bootstrap (full map).
    2. Subscribe to the matching bus/websocket event for incremental updates.
@@ -324,6 +329,9 @@ function renderAgent(a) {
   queue-name string across logout (only `false` if the agent has no configured
   queue at all). Read `is_logged` / `queues` to know whether the agent is
   connected. The type is still a `string | false` union — handle both.
-- **Per-worker state:** if your token is load-balanced across workers, a
-  `GET /queues/agents_status` may briefly differ from the event stream. Reconcile
-  toward the events.
+- **State is shared in-process, not durable.** `wazo-calld` is single-process,
+  so a `GET /queues/agents_status` and the event stream read the same state —
+  no cross-worker divergence to reconcile. But after a `wazo-calld` restart the
+  bootstrap is rebuilt from agentd/confd: `agents` come back without session
+  timestamps (empty until the next live event) and `stats` counters restart
+  from zero. Re-`GET` to bootstrap after a reconnect, then trust the events.

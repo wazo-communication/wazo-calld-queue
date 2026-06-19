@@ -25,13 +25,27 @@ Version source: `wazo/plugin.yml`.
 
 - Map REST API calls to Asterisk Manager Interface actions.
 - Consume `QueueCaller*` and `QueueMember*` bus events in `bus_consume.py`.
-- Maintain global in-memory dicts: `stats` and `agents`.
-- An agent may serve several queues: each `agents[tenant][id]` tracks runtime
-  membership in `queues` and per-queue pause in `paused_queues`; `queue`,
-  `is_logged`, and `is_paused` are derived from these via `_sync_derived` and
-  never written directly.
+- Maintain the in-memory state `self._stats` and `self._agents`, owned by the
+  `QueuesBusEventHandler` instance (not module globals) and guarded by a
+  reentrant `self._lock`. `wazo-calld` runs as a **single process** with a
+  cheroot thread pool (`max_threads`, default 10): the bus consumer thread
+  mutates this state while REST worker threads read and lazily seed it, so the
+  same dict is shared by every thread and **every access must hold `_lock`**.
+  The state methods (`get_agents_status`, `get_stats`, `add_agent`,
+  `_agents_status`, `_livestats`) take the lock; the heavy ones delegate to a
+  `*_locked` helper so the body need not re-indent.
+- An agent may serve several queues: each `self._agents[tenant][id]` tracks
+  runtime membership in `queues` and per-queue pause in `paused_queues`;
+  `queue`, `is_logged`, and `is_paused` are derived from these via
+  `_sync_derived` and never written directly.
 - Republish enriched events to the front-end websocket.
-- Treat in-memory state as non-shared across workers and non-persistent across restarts.
+- In-memory state is **not persisted across restarts**: `agents` is rebuilt
+  lazily from agentd/confd on demand (session timestamps stay empty until the
+  next live event); `stats` are live counters, intentionally ephemeral (they
+  also self-reset when the day changes). For durable queue history use the
+  `wazo_call_logd_queue` plugin (`queue_log`), not this state. Because
+  `wazo-calld` is single-process, REST and the event stream read the **same**
+  state — there is no cross-worker divergence to reconcile (see issue #11).
 - Resolve tenant UUID from `WAZO_TENANT_UUID` or confd via `_extract_tenant_uuid`.
 
 ## Conventions
