@@ -627,12 +627,17 @@ class TestMultiQueueMembership:
     def test_member_added_seeds_configured_queues_when_absent(self, handler):
         # Defensive: a state created before ``configured_queues`` existed (e.g.
         # a rolling deploy or an older bootstrap) must not KeyError on a live
-        # join — the field is seeded lazily.
+        # join — the field is seeded lazily. It must seed from the EXISTING
+        # runtime ``queues`` (not empty), so the ``queues ⊆ configured_queues``
+        # invariant holds: a queue the agent is already logged into must not
+        # vanish from the roster just because the new queue triggered seeding.
         self._logged_agent(handler, ["support"])  # no configured_queues key
 
         handler._queue_member_added(_member_added_event("sales"))
 
-        assert "sales" in handler._agents[TENANT][5]["configured_queues"]
+        configured = handler._agents[TENANT][5]["configured_queues"]
+        assert "support" in configured  # pre-existing runtime queue preserved
+        assert "sales" in configured
 
     def test_member_removed_from_one_queue_stays_logged(self, handler):
         self._logged_agent(handler, ["support", "sales"])

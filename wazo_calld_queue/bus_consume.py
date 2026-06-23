@@ -477,7 +477,11 @@ class QueuesBusEventHandler(object):
             # Handle connection to a queue (an agent may serve several queues)
             state = agents[tenant_uuid][agent]
             state.setdefault("queues", [])
-            state.setdefault("configured_queues", [])
+            # Seed the roster from the EXISTING runtime queues (not empty) when a
+            # state predates the field (rolling deploy), so an already-logged-in
+            # queue is not dropped from the roster — preserves queues ⊆
+            # configured_queues.
+            state.setdefault("configured_queues", list(state["queues"]))
             if event["Queue"] not in state["queues"]:
                 state["queues"].append(event["Queue"])
             # An agent only logs into a queue it is configured for, so keep the
