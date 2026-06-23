@@ -67,6 +67,24 @@ def _sync_derived(state):
     state["is_paused"] = bool(paused_queues)
 
 
+def _reset_session_fields(state):
+    """Clear per-session/device fields of a fully-logged-out agent.
+
+    Shared by ``QueueMemberRemoved`` (last runtime queue left) and
+    ``_sync_configured_queues`` (a confd dissociation pruned the last runtime
+    queue), so a published ``is_logged: false`` status never carries stale
+    login/call data. ``is_offline`` is intentionally left untouched (it tracks
+    the websocket/device, not the queue session).
+    """
+    state["is_talking"] = False
+    state["is_ringing"] = False
+    state["logged_at"] = ""
+    state["paused_at"] = ""
+    state["talked_at"] = ""
+    state["talked_with_number"] = ""
+    state["talked_with_name"] = ""
+
+
 def _agent_fullname(info):
     fullname = ""
     if str(info["firstname"]) != "None":
@@ -364,6 +382,10 @@ class QueuesBusEventHandler(object):
             state["paused_queues"] = [
                 q for q in state.get("paused_queues", []) if q in state["queues"]
             ]
+            if not state["queues"]:
+                # The prune emptied runtime membership: this is a full logout,
+                # so clear session/device fields like QueueMemberRemoved does.
+                _reset_session_fields(state)
             if not configured:
                 # No queue configured anymore: unlike a logged-off-but-configured
                 # agent, there is no home queue to fall back on, so clear the
@@ -603,13 +625,7 @@ class QueuesBusEventHandler(object):
                 state["paused_queues"].remove(event["Queue"])
             if not state["queues"]:
                 # Fully logged out: reset session/device fields
-                state["is_talking"] = False
-                state["is_ringing"] = False
-                state["logged_at"] = ""
-                state["paused_at"] = ""
-                state["talked_at"] = ""
-                state["talked_with_number"] = ""
-                state["talked_with_name"] = ""
+                _reset_session_fields(state)
             _sync_derived(state)
 
         if event["Event"] == "QueueMemberPause" and event["Membership"] == "dynamic":

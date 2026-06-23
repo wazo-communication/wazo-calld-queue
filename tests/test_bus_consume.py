@@ -1244,6 +1244,53 @@ class TestQueueMemberAgentConfdEvents:
         assert agent["paused_queues"] == []
         assert agent["is_logged"] is True
 
+    def test_dissociation_to_empty_resets_session_fields(self, handler):
+        # Pruning the last runtime queue is a full logout: session/device fields
+        # must be cleared like QueueMemberRemoved does, else the published status
+        # shows is_logged=false with stale login/call data.
+        state = self._seed(handler, 7, configured=["test"], queues=["test"])
+        state.update(
+            logged_at="2026-06-17T12:00:00.000000",
+            paused_at="2026-06-17T12:05:00.000000",
+            is_talking=True,
+            is_ringing=True,
+            talked_at="2026-06-17T12:06:00.000000",
+            talked_with_number="1000",
+            talked_with_name="Alice",
+        )
+        handler.confd.agents.get.return_value = _confd_agent(7, [])
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 7})
+
+        agent = handler._agents[TENANT][7]
+        assert agent["queues"] == []
+        assert agent["is_logged"] is False
+        assert agent["logged_at"] == ""
+        assert agent["paused_at"] == ""
+        assert agent["is_talking"] is False
+        assert agent["is_ringing"] is False
+        assert agent["talked_at"] == ""
+        assert agent["talked_with_number"] == ""
+        assert agent["talked_with_name"] == ""
+
+    def test_dissociation_keeping_a_queue_preserves_session_fields(self, handler):
+        # A partial prune (one of several runtime queues) is NOT a logout: the
+        # session fields stay untouched.
+        state = self._seed(
+            handler, 7, configured=["support", "test"], queues=["support", "test"]
+        )
+        state.update(
+            logged_at="2026-06-17T12:00:00.000000", is_talking=True
+        )
+        handler.confd.agents.get.return_value = _confd_agent(7, ["support"])
+
+        handler._queue_member_agent_dissociated({"queue_id": 3, "agent_id": 7})
+
+        agent = handler._agents[TENANT][7]
+        assert agent["queues"] == ["support"]
+        assert agent["logged_at"] == "2026-06-17T12:00:00.000000"
+        assert agent["is_talking"] is True
+
     def test_dissociation_publishes_updated_status(self, handler):
         self._seed(handler, 21, configured=["support"])
         handler.confd.agents.get.return_value = _confd_agent(21, [])

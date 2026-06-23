@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confd. Previously a queue removed from a **logged-off** agent in confd stayed
   in `configured_queues` (and the legacy `queue` field) until the next
   `wazo-calld` restart, because the plugin only learned membership from runtime
-  AMI events and never pruned the configured roster.
+  AMI events and never pruned the configured roster. When the prune empties the
+  agent's runtime membership, session/device fields (`logged_at`, `paused_at`,
+  `is_talking`, …) are cleared just like a regular last-queue logout.
 - The legacy `queue` field is now reset to `false` when an agent is no longer
   configured for any queue. It stays "sticky" (keeps its last-known name) only
   while the agent still belongs to at least one queue — there is no longer a
