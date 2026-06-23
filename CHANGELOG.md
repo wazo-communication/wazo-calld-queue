@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-06-23
+
+### Fixed
+- `configured_queues` (and runtime `queues` / `paused_queues`) are now kept in
+  sync with confd when an agent is added to or removed from a queue: the handler
+  subscribes to the confd `queue_member_agent_associated` /
+  `queue_member_agent_dissociated` events and resyncs the cached roster from
+  confd. Previously a queue removed from a **logged-off** agent in confd stayed
+  in `configured_queues` (and the legacy `queue` field) until the next
+  `wazo-calld` restart, because the plugin only learned membership from runtime
+  AMI events and never pruned the configured roster.
+- The legacy `queue` field is now reset to `false` when an agent is no longer
+  configured for any queue. It stays "sticky" (keeps its last-known name) only
+  while the agent still belongs to at least one queue — there is no longer a
+  home queue to fall back on once the roster is empty.
+
 ## [2.4.0] - 2026-06-23
 
 ### Added

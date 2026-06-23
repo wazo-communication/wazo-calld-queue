@@ -42,7 +42,15 @@ Version source: `wazo/plugin.yml`.
   **independent of login state** (issue #13). It is seeded at bootstrap
   (`get_agents_status` / `add_agent`, from agentd's queue list or confd) and
   kept a superset of `queues` on `QueueMemberAdded`, so a logged-off configured
-  member stays discoverable per queue. It does **not** feed `is_logged` /
+  member stays discoverable per queue. It is **resynced from confd** on the
+  confd config events `queue_member_agent_associated` /
+  `queue_member_agent_dissociated` (`_sync_configured_queues`): those events only
+  carry `queue_id` / `agent_id`, so the handler re-fetches the agent from confd
+  to resolve the tenant and the authoritative queue-name roster, then reconciles
+  the cached state (pruning runtime `queues` / `paused_queues` to keep
+  `paused_queues ⊆ queues ⊆ configured_queues`). Without this, a queue removed
+  from a logged-off agent in confd would stay in `configured_queues` until the
+  next process restart. It does **not** feed `is_logged` /
   `is_paused` — those stay derived from runtime `queues` / `paused_queues`.
   Clients build a queue's roster from `configured_queues` and render per-queue
   status from `queues` / `paused_queues` (see `docs/FRONTEND_INTEGRATION.md`).
