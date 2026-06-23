@@ -38,6 +38,14 @@ Version source: `wazo/plugin.yml`.
   runtime membership in `queues` and per-queue pause in `paused_queues`;
   `queue`, `is_logged`, and `is_paused` are derived from these via
   `_sync_derived` and never written directly.
+- `configured_queues` is the agent's full confd-configured queue roster,
+  **independent of login state** (issue #13). It is seeded at bootstrap
+  (`get_agents_status` / `add_agent`, from agentd's queue list or confd) and
+  kept a superset of `queues` on `QueueMemberAdded`, so a logged-off configured
+  member stays discoverable per queue. It does **not** feed `is_logged` /
+  `is_paused` — those stay derived from runtime `queues` / `paused_queues`.
+  Clients build a queue's roster from `configured_queues` and render per-queue
+  status from `queues` / `paused_queues` (see `docs/FRONTEND_INTEGRATION.md`).
 - Republish enriched events to the front-end websocket.
 - In-memory state is **not persisted across restarts**: `agents` is rebuilt
   lazily from agentd/confd on demand (session timestamps stay empty until the

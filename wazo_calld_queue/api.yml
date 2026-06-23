@@ -174,7 +174,22 @@ definitions:
           compatibility; prefer `queues` for multi-queue agents.
         type: string
       queues:
-        description: Names of the queues the agent is currently a member of
+        description: >-
+          Names of the queues the agent is **currently** a member of at
+          runtime (logged in). Empty when the agent is logged off, even if it
+          is a configured member — use `configured_queues` for the full roster.
+        type: array
+        items:
+          type: string
+      configured_queues:
+        description: >-
+          Names of every queue the agent is configured for in confd,
+          **independent of login state**. Unlike `queues`, this stays populated
+          while the agent is logged off, so a client can list the agent as a
+          (disconnected) member of each queue. To render an agent's status in a
+          given queue: present when the queue is also in `queues`, paused when
+          in `paused_queues`, otherwise disconnected. Does not feed `is_logged`
+          / `is_paused`.
         type: array
         items:
           type: string

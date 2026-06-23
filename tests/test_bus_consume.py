@@ -360,6 +360,51 @@ class TestGetAgentsStatus:
 
         handler.confd.agents.list.assert_called_once()
 
+    def test_configured_queues_exposes_logged_off_membership(self, handler):
+        # A multi-queue agent configured in support+test but logged off (no
+        # agentd status): runtime ``queues`` stays empty, but the full confd
+        # roster must surface in ``configured_queues`` so a client can list the
+        # agent as a (disconnected) member of BOTH queues. This is the issue #13
+        # gap: the legacy ``queue`` carries only the first queue, hiding ``test``.
+        handler.confd.agents.list.return_value = {
+            "items": [
+                {
+                    "id": 3,
+                    "firstname": "Mathias",
+                    "lastname": "Wolff",
+                    "number": "8002",
+                    "queues": [{"name": "support"}, {"name": "test"}],
+                }
+            ]
+        }
+        handler.agentd.agents.get_agent_statuses.return_value = []
+
+        result = handler.get_agents_status(TENANT)
+
+        assert result[3]["configured_queues"] == ["support", "test"]
+        assert result[3]["queues"] == []
+        assert result[3]["is_logged"] is False
+
+    def test_configured_queues_is_superset_of_runtime_membership(self, handler):
+        # Agent 3 logged into support only, but configured for support+test:
+        # ``queues`` reflects runtime (support), ``configured_queues`` the full
+        # roster (support+test) so ``test`` shows the agent as a disconnected
+        # member there.
+        handler.confd.agents.list.return_value = {
+            "items": [
+                {"id": 3, "firstname": "Mathias", "lastname": "Wolff", "number": "8002"}
+            ]
+        }
+        handler.agentd.agents.get_agent_statuses.return_value = [
+            _agentd_status(3, [("support", True, False), ("test", False, False)]),
+        ]
+
+        result = handler.get_agents_status(TENANT)
+
+        assert result[3]["queues"] == ["support"]
+        assert result[3]["configured_queues"] == ["support", "test"]
+        assert result[3]["is_logged"] is True
+
 
 class TestAddAgent:
     def test_adds_missing_agent_from_confd(self, handler):
@@ -564,6 +609,35 @@ class TestMultiQueueMembership:
         agent = handler._agents[TENANT][5]
         assert agent["queues"] == ["support", "sales"]
         assert agent["is_logged"] is True
+
+    def test_member_added_keeps_configured_roster_a_superset(self, handler):
+        # An agent can only log into a queue it is configured for, so a runtime
+        # join must surface in ``configured_queues`` too (issue #13 invariant
+        # ``queues ⊆ configured_queues``): the live event corrects a roster the
+        # bootstrap missed (e.g. queue configured mid-session).
+        agent = self._logged_agent(handler, ["support"])
+        agent["configured_queues"] = ["support"]
+
+        handler._queue_member_added(_member_added_event("sales"))
+
+        agent = handler._agents[TENANT][5]
+        assert agent["queues"] == ["support", "sales"]
+        assert agent["configured_queues"] == ["support", "sales"]
+
+    def test_member_added_seeds_configured_queues_when_absent(self, handler):
+        # Defensive: a state created before ``configured_queues`` existed (e.g.
+        # a rolling deploy or an older bootstrap) must not KeyError on a live
+        # join — the field is seeded lazily. It must seed from the EXISTING
+        # runtime ``queues`` (not empty), so the ``queues ⊆ configured_queues``
+        # invariant holds: a queue the agent is already logged into must not
+        # vanish from the roster just because the new queue triggered seeding.
+        self._logged_agent(handler, ["support"])  # no configured_queues key
+
+        handler._queue_member_added(_member_added_event("sales"))
+
+        configured = handler._agents[TENANT][5]["configured_queues"]
+        assert "support" in configured  # pre-existing runtime queue preserved
+        assert "sales" in configured
 
     def test_member_removed_from_one_queue_stays_logged(self, handler):
         self._logged_agent(handler, ["support", "sales"])

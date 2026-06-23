@@ -129,7 +129,8 @@ An agent can serve **several queues at once**. Each agent object exposes:
 | `id` | int | agent id (merge key) | — |
 | `number` | string | agent number | — |
 | `fullname` | string | display name | — |
-| `queues` | string[] | queues the agent is **currently** a member of (runtime) | per-queue |
+| `queues` | string[] | queues the agent is **currently** a member of (runtime, logged in) | per-queue |
+| `configured_queues` | string[] | **every** queue the agent is configured for in confd, **independent of login** | per-queue |
 | `paused_queues` | string[] | queues in which the agent is **currently paused** | per-queue |
 | `queue` | string \| false | legacy single-queue field — first runtime queue while logged in, else last-known/home queue; **not reset on logout** (back-compat) | derived |
 | `is_logged` | bool | `queues` is non-empty | derived |
@@ -144,6 +145,22 @@ An agent can serve **several queues at once**. Each agent object exposes:
 
 Rules to implement correctly:
 
+- **Build a queue's roster from `configured_queues`, render status from
+  `queues` / `paused_queues`.** `queues` lists only the queues the agent is
+  *currently logged into*, so a configured member who is logged off has
+  `queues: []` and would be **invisible** if you built the roster from `queues`
+  alone. List a queue's members as every agent with that queue in
+  `configured_queues`, then derive each agent's **per-queue** status:
+  - present/connected → the queue is also in `queues`
+  - paused → the queue is in `paused_queues`
+  - disconnected → the queue is only in `configured_queues`
+
+  This is the multi-queue fix for issue #13: an agent logged into queue A but
+  configured for A+B shows as connected under A and disconnected under B. Do
+  **not** use the agent-global `is_logged` / `is_paused` to render per-queue
+  status — they are OR-ed across all queues and cannot express "connected to A,
+  disconnected from B". (Device fields `is_talking` / `is_ringing` /
+  `is_offline` *are* global — see below.)
 - **Use `queues`, not `queue`.** `queue` is only the first element, provided so
   older clients keep working. A multi-queue UI must read `queues`.
 - **`is_logged` / `is_paused` are derived — never authoritative on their own.**
@@ -199,6 +216,7 @@ the agent object; the client just consumes `queue_agents_status`.
     "fullname": "John Doe",
     "queue": "support",
     "queues": ["support", "sales"],
+    "configured_queues": ["support", "sales"],
     "paused_queues": ["sales"],
     "is_logged": true,
     "is_paused": true,
@@ -228,6 +246,7 @@ The websocket envelope wraps the payload in `data` (Wazo convention). The
     "fullname": "John Doe",
     "queue": "sales",
     "queues": ["sales"],
+    "configured_queues": ["support", "sales"],
     "paused_queues": [],
     "is_logged": true,
     "is_paused": false,
@@ -299,15 +318,22 @@ websocket.on('queue_livestats', ({ data: map }) => {
   Object.assign(stats, map);                          // merge by queue name
 });
 
-// Rendering an agent's queues (multi-queue aware)
-function renderAgent(a) {
-  const queues = a.queues;                            // NOT a.queue
-  const paused = new Set(a.paused_queues);
-  return queues.map(q => ({
-    queue: q,
-    paused: paused.has(q),                            // per-queue pause
-  }));
-  // a.is_talking / a.is_ringing / a.is_offline are global to the agent
+// A queue's roster (incl. logged-off members) + per-queue status
+function rosterFor(agents, queue) {
+  const logged = a => new Set(a.queues).has(queue);
+  const paused = a => new Set(a.paused_queues).has(queue);
+  return Object.values(agents)
+    .filter(a => new Set(a.configured_queues).has(queue))   // roster = configured
+    .map(a => ({
+      id: a.id,
+      // per-queue status — NOT a.is_logged / a.is_paused (those are global)
+      status: a.is_talking ? 'talking'                      // device flags: global
+            : a.is_offline ? 'offline'
+            : a.is_ringing ? 'ringing'
+            : paused(a)    ? 'paused'                        // per-queue
+            : logged(a)    ? 'connected'                     // per-queue
+            :                'disconnected',                 // configured only
+    }));
 }
 ```
 
@@ -318,11 +344,18 @@ function renderAgent(a) {
 - **Initial state reflects live per-queue status.** On first build the server
   reads each agent's current per-queue `logged` / `paused` flags from
   `wazo-agentd`, so `queues` and `paused_queues` are the queues the agent is
-  actually logged into / paused in — not every configured queue. The only
-  fields it cannot recover at bootstrap are the session timestamps
-  (`logged_at` / `paused_at`), which stay empty until the next live event for
-  that agent (agentd exposes no login/pause time). Treat an empty timestamp as
-  "unknown", not "just now".
+  actually logged into / paused in — not every configured queue. The full
+  configured roster is in `configured_queues` instead (from agentd's queue
+  list, or confd when agentd has no status for the agent), so a logged-off
+  member is still discoverable per queue. The only fields it cannot recover at
+  bootstrap are the session timestamps (`logged_at` / `paused_at`), which stay
+  empty until the next live event for that agent (agentd exposes no login/pause
+  time). Treat an empty timestamp as "unknown", not "just now".
+- **`configured_queues` is a confd snapshot.** It is seeded at bootstrap (and
+  when an agent is first seen on a live event) and kept a superset of `queues`
+  as the agent logs in. Like the rest of this in-memory model, a confd
+  membership change made mid-session is not reflected until the next
+  `wazo-calld` restart re-bootstraps the state.
 - **`talked_with_*` is populated on `QueueCallerLeave`** (when a caller is
   connected to the agent) and cleared when the call ends.
 - **`queue` is a back-compat string, not a logout signal.** It stays a
