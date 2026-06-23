@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-06-23
+
+### Added
+- `configured_queues` on each agent in `GET /queues/agents_status` and the
+  `queue_agents_status` event: the full confd-configured queue roster,
+  **independent of login state**. Unlike runtime `queues` (which is empty when
+  the agent is logged off), it lets a client list a queue's complete roster —
+  including logged-off members — and derive per-queue status (present when the
+  queue is also in `queues`, paused when in `paused_queues`, else disconnected).
+  It is kept a superset of `queues`, and does **not** feed `is_logged` /
+  `is_paused`, which stay derived from runtime membership. Fixes #13, where a
+  multi-queue agent that was logged off only surfaced its first configured queue
+  via the legacy `queue` field and was undiscoverable for its other queues.
+- `docs/FRONTEND_INTEGRATION.md` and the `QueueAgentsStatus` Swagger definition
+  document the new field and the per-queue roster/status pattern.
+
 ## [2.3.1] - 2026-06-18
 
 ### Changed
@@ -125,6 +141,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release: Queue REST API and bus events for Asterisk-based queue management.
 
+[2.4.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.0.1...v2.0.2
