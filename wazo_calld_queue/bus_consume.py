@@ -108,7 +108,13 @@ def _membership_from_status(status):
 
 
 def _build_agent_state(
-    agent_id, number, fullname, queues=None, paused_queues=None, home_queue=False
+    agent_id,
+    number,
+    fullname,
+    queues=None,
+    paused_queues=None,
+    home_queue=False,
+    configured_queues=None,
 ):
     """Build a fresh agent state dict.
 
@@ -122,6 +128,13 @@ def _build_agent_state(
     ``home_queue`` seeds the legacy ``queue`` field (kept for v2.0.x clients)
     so a logged-out agent still carries a queue-name string rather than
     ``False``; when logged in, ``queue`` tracks the first runtime queue.
+
+    ``configured_queues`` is the agent's full confd-configured queue roster,
+    **independent of login state**. Unlike ``queues`` (runtime membership), it
+    lists every queue the agent belongs to even while logged off, so a client
+    can render the complete per-queue roster — marking a member present when the
+    queue is also in ``queues``, paused when in ``paused_queues``, else
+    disconnected. It does NOT feed ``is_logged`` / ``is_paused`` (see issue #13).
     """
     runtime_queues = list(queues or [])
     paused_queues = [q for q in (paused_queues or []) if q in runtime_queues]
@@ -131,6 +144,7 @@ def _build_agent_state(
         "fullname": fullname,
         "queue": home_queue or False,
         "queues": runtime_queues,
+        "configured_queues": list(configured_queues or []),
         "paused_queues": paused_queues,
         "is_logged": False,
         "is_paused": False,
@@ -313,10 +327,12 @@ class QueuesBusEventHandler(object):
                     runtime_queues, paused_queues, all_queues = (
                         _membership_from_status(status)
                     )
-                    # Seed the legacy ``queue`` from agentd's queue list, falling
-                    # back to confd when agentd has no status (or no queues) for
-                    # the agent, so a configured agent never gets ``queue:
-                    # false``.
+                    # The full configured roster: agentd reports every queue the
+                    # agent is configured for (with per-queue flags), falling
+                    # back to confd when agentd has no status for the agent. Used
+                    # both to seed the legacy ``queue`` (first element, so a
+                    # configured agent never gets ``queue: false``) and the
+                    # login-independent ``configured_queues`` (issue #13).
                     home_queues = all_queues or _queue_names(agent)
                     home_queue = home_queues[0] if home_queues else False
 
@@ -328,6 +344,7 @@ class QueuesBusEventHandler(object):
                             runtime_queues,
                             paused_queues,
                             home_queue,
+                            configured_queues=home_queues,
                         )
             logger.debug(
                 "agents status for tenant %s: %s",
@@ -353,6 +370,7 @@ class QueuesBusEventHandler(object):
                     member,
                     _agent_fullname(agentInfo),
                     home_queue=configured[0] if configured else False,
+                    configured_queues=configured,
                 )
 
     def get_stats(self, name):
@@ -459,8 +477,14 @@ class QueuesBusEventHandler(object):
             # Handle connection to a queue (an agent may serve several queues)
             state = agents[tenant_uuid][agent]
             state.setdefault("queues", [])
+            state.setdefault("configured_queues", [])
             if event["Queue"] not in state["queues"]:
                 state["queues"].append(event["Queue"])
+            # An agent only logs into a queue it is configured for, so keep the
+            # roster a superset of runtime membership (issue #13): this also
+            # backfills a queue the bootstrap roster missed.
+            if event["Queue"] not in state["configured_queues"]:
+                state["configured_queues"].append(event["Queue"])
             state["interface"] = event["StateInterface"]
             if not state.get("logged_at"):
                 # LoginTime: set on first observed queue join, kept across
