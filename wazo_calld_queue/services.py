@@ -77,33 +77,33 @@ class QueueService(object):
         queue_id = self._authorize_supervisor(
             supervisor_uuid, queue_name, tenant_uuid
         )
+        self._delegate(
+            self.agentd.agents.agent_login_to_queue, agent_id, queue_id, tenant_uuid
+        )
         logger.info(
-            "supervisor %s connects agent %s to queue %s (id %s, tenant %s)",
+            "supervisor %s connected agent %s to queue %s (id %s, tenant %s)",
             supervisor_uuid,
             agent_id,
             queue_name,
             queue_id,
             tenant_uuid,
-        )
-        self._delegate(
-            self.agentd.agents.agent_login_to_queue, agent_id, queue_id, tenant_uuid
         )
 
     def disconnect_agent(self, queue_name, agent_id, supervisor_uuid, tenant_uuid):
         queue_id = self._authorize_supervisor(
             supervisor_uuid, queue_name, tenant_uuid
         )
-        logger.info(
-            "supervisor %s disconnects agent %s from queue %s (id %s, tenant %s)",
-            supervisor_uuid,
-            agent_id,
-            queue_name,
-            queue_id,
-            tenant_uuid,
-        )
         self._delegate(
             self.agentd.agents.agent_logoff_from_queue,
             agent_id,
+            queue_id,
+            tenant_uuid,
+        )
+        logger.info(
+            "supervisor %s disconnected agent %s from queue %s (id %s, tenant %s)",
+            supervisor_uuid,
+            agent_id,
+            queue_name,
             queue_id,
             tenant_uuid,
         )
