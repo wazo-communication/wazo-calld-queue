@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright 2018 The Wazo Authors  (see the AUTHORS file)
+# Copyright 2018-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
 from marshmallow import (
@@ -61,7 +61,15 @@ class InterceptSchema(Schema):
     call_id = fields.Str()
     destination = fields.Str()
 
+
+class QueueAgentActionSchema(Schema):
+    agent_id = fields.Integer(required=True)
+
+    class Meta:
+        strict = True
+
 intercept_schema = InterceptSchema()
 queue_list_schema = QueueListSchema()
 queue_schema = QueueSchema()
 queue_member_schema = QueueMemberSchema()
+queue_agent_action_schema = QueueAgentActionSchema()

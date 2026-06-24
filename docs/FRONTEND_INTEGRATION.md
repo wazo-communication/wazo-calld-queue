@@ -57,6 +57,8 @@ All REST endpoints are `wazo-auth` protected; pass a valid token. Required ACLs
 | `PUT /queues/{queue_name}/add_member` | `calld.queues.{queue_name}.add_member.update` |
 | `PUT /queues/{queue_name}/remove_member` | `calld.queues.{queue_name}.remove_member.update` |
 | `PUT /queues/{queue_name}/pause_member` | `calld.queues.{queue_name}.pause_member.update` |
+| `PUT /queues/{queue_name}/connect` | `calld.queues.{queue_name}.connect.update` |
+| `PUT /queues/{queue_name}/disconnect` | `calld.queues.{queue_name}.disconnect.update` |
 | `POST /queues/intercept/{queue_name}` | `calld.queues.{queue_name}.intercept.create` |
 
 Bus/websocket events all require `events.calls.me` and are tenant-scoped: you
@@ -75,10 +77,38 @@ only receive events for your own tenant.
 | `PUT` | `/queues/{queue_name}/add_member` | Log a member into a queue | `204` |
 | `PUT` | `/queues/{queue_name}/remove_member` | Remove a member from a queue | `204` |
 | `PUT` | `/queues/{queue_name}/pause_member` | Pause/unpause a member in a queue | `204` |
+| `PUT` | `/queues/{queue_name}/connect` | **Supervisor** connects an agent to a queue | `204` |
+| `PUT` | `/queues/{queue_name}/disconnect` | **Supervisor** disconnects an agent from a queue | `204` |
 | `POST` | `/queues/intercept/{queue_name}` | Intercept a waiting caller | `201` |
 
 `add_member` / `remove_member` / `pause_member` act on **a single queue**. To
 manage an agent serving several queues, call them once per queue.
+
+### Supervisor connect / disconnect
+
+`PUT /queues/{queue_name}/connect` and `PUT /queues/{queue_name}/disconnect`
+let a **supervisor** toggle another agent's membership in one queue. Body:
+
+```json
+{ "agent_id": 42 }
+```
+
+The server authorizes the call **server-side**: the token's user must be an
+agent that is itself a member of `{queue_name}`. The action is delegated to
+`wazo-agentd` (it logs the targeted agent in/out of that single queue). There is
+**no dedicated bus event** — the result propagates through the usual
+`queue_agents_status` event (the target agent's `queues` gains/loses the queue),
+so a client only needs to keep merging that event as usual.
+
+Error codes:
+
+| Code | Meaning |
+|---|---|
+| `204` | Done. Also returned when the agent is **already** (dis)connected (idempotent). |
+| `400` | The targeted agent has no active session — it must log in before being connected. |
+| `403` | The caller is not a member of `{queue_name}` (not allowed to supervise it). |
+| `404` | No such agent or queue. |
+| `502` | Unexpected error from `wazo-agentd`. |
 
 ---
 

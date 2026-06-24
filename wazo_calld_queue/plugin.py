@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright 2018-2024 The Wazo Authors  (see the AUTHORS file)
+# Copyright 2018-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
 from wazo_amid_client import Client as AmidClient
@@ -15,6 +15,8 @@ from .resources import (
     QueuePauseMemberResource,
     QueueLiveStatsResource,
     QueueAgentsStatusResource,
+    QueueConnectAgentResource,
+    QueueDisconnectAgentResource,
 )
 from .services import QueueService
 from .bus_consume import QueuesBusEventHandler
@@ -79,6 +81,16 @@ class Plugin(object):
         api.add_resource(
             QueueAgentsStatusResource,
             "/queues/agents_status",
+            resource_class_args=[queues_service],
+        )
+        api.add_resource(
+            QueueConnectAgentResource,
+            "/queues/<queue_name>/connect",
+            resource_class_args=[queues_service],
+        )
+        api.add_resource(
+            QueueDisconnectAgentResource,
+            "/queues/<queue_name>/disconnect",
             resource_class_args=[queues_service],
         )
         api.add_resource(
