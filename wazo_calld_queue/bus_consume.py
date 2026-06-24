@@ -50,6 +50,11 @@ def _sync_derived(state):
     ``False`` on logout**: the last known (or seeded home) queue name is kept so
     a logged-out agent still carries a string. Use ``is_logged`` / ``queues``,
     not ``queue``, to determine connection state.
+
+    The one place ``queue`` *is* reset is when the agent stops being configured
+    for any queue at all (``configured_queues`` empties out): that reset is done
+    by ``_sync_configured_queues`` before calling this helper, since there is no
+    longer a home queue to keep sticky.
     """
     queues = state.setdefault("queues", [])
     paused_queues = state.setdefault("paused_queues", [])
@@ -60,6 +65,24 @@ def _sync_derived(state):
     # else: keep the existing (last-known / home) queue name for back-compat.
     state["is_logged"] = bool(queues)
     state["is_paused"] = bool(paused_queues)
+
+
+def _reset_session_fields(state):
+    """Clear per-session/device fields of a fully-logged-out agent.
+
+    Shared by ``QueueMemberRemoved`` (last runtime queue left) and
+    ``_sync_configured_queues`` (a confd dissociation pruned the last runtime
+    queue), so a published ``is_logged: false`` status never carries stale
+    login/call data. ``is_offline`` is intentionally left untouched (it tracks
+    the websocket/device, not the queue session).
+    """
+    state["is_talking"] = False
+    state["is_ringing"] = False
+    state["logged_at"] = ""
+    state["paused_at"] = ""
+    state["talked_at"] = ""
+    state["talked_with_number"] = ""
+    state["talked_with_name"] = ""
 
 
 def _agent_fullname(info):
@@ -188,6 +211,18 @@ class QueuesBusEventHandler(object):
         bus_consumer.subscribe("QueueMemberRemoved", self._queue_member_removed)
         bus_consumer.subscribe("QueueMemberRinginuse", self._queue_member_ringinuse)
         bus_consumer.subscribe("QueueMemberStatus", self._queue_member_status)
+        # confd configuration events (not AMI): keep ``configured_queues`` in
+        # sync with the confd-configured roster regardless of login state, so a
+        # queue added to / removed from an agent in confd is reflected without
+        # waiting for a process restart (issue #13). Their payload only carries
+        # ``queue_id`` / ``agent_id``, so the handler re-fetches the agent from
+        # confd to resolve the tenant and the authoritative queue-name roster.
+        bus_consumer.subscribe(
+            "queue_member_agent_associated", self._queue_member_agent_associated
+        )
+        bus_consumer.subscribe(
+            "queue_member_agent_dissociated", self._queue_member_agent_dissociated
+        )
 
     def _queue_caller_abandon(self, event):
         tenant_uuid = self._extract_tenant_uuid(event)
@@ -295,6 +330,70 @@ class QueuesBusEventHandler(object):
             self._agents_status(event, tenant_uuid)
             bus_event = QueueMemberStatusEvent(event, tenant_uuid)
         self.bus_publisher.publish(bus_event)
+
+    def _queue_member_agent_associated(self, event):
+        self._sync_configured_queues(event)
+
+    def _queue_member_agent_dissociated(self, event):
+        self._sync_configured_queues(event)
+
+    def _sync_configured_queues(self, event):
+        """Resync an agent's ``configured_queues`` from confd after a confd
+        (dis)association event.
+
+        These confd events only carry ``queue_id`` / ``agent_id`` (no tenant,
+        no queue name), so we re-fetch the agent from confd to get both the
+        tenant and the authoritative queue-name roster, then reconcile the
+        cached state. The runtime sets are pruned to keep the invariant
+        ``paused_queues ⊆ queues ⊆ configured_queues``. No-op when the agent is
+        not cached (nothing to reconcile — it will be seeded fresh on its next
+        bootstrap or runtime event).
+        """
+        try:
+            agent_id = int(event["agent_id"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning(
+                "Dropping malformed queue_member_agent event (no agent_id): %s",
+                event,
+            )
+            return
+
+        try:
+            agent_info = self.confd.agents.get(agent_id)
+        except Exception:
+            logger.warning(
+                "Could not resolve agent %s from confd to sync configured_queues",
+                agent_id,
+                exc_info=True,
+            )
+            return
+
+        tenant_uuid = agent_info.get("tenant_uuid")
+        configured = _queue_names(agent_info)
+
+        with self._lock:
+            state = (self._agents.get(tenant_uuid) or {}).get(agent_id)
+            if not state:
+                return
+            state["configured_queues"] = configured
+            # Keep paused_queues ⊆ queues ⊆ configured_queues: drop any runtime
+            # membership/pause for a queue the agent is no longer configured for.
+            state["queues"] = [q for q in state.get("queues", []) if q in configured]
+            state["paused_queues"] = [
+                q for q in state.get("paused_queues", []) if q in state["queues"]
+            ]
+            if not state["queues"]:
+                # The prune emptied runtime membership: this is a full logout,
+                # so clear session/device fields like QueueMemberRemoved does.
+                _reset_session_fields(state)
+            if not configured:
+                # No queue configured anymore: unlike a logged-off-but-configured
+                # agent, there is no home queue to fall back on, so clear the
+                # sticky legacy ``queue`` string instead of keeping a stale name.
+                # (``_sync_derived`` only keeps it sticky; it never resets it.)
+                state["queue"] = False
+            _sync_derived(state)
+            self._queue_agents_status(tenant_uuid, agent_id)
 
     def _queue_livestats(self, tenant_uuid):
         # Caller holds ``self._lock``. Publishes the whole stats map.
@@ -526,13 +625,7 @@ class QueuesBusEventHandler(object):
                 state["paused_queues"].remove(event["Queue"])
             if not state["queues"]:
                 # Fully logged out: reset session/device fields
-                state["is_talking"] = False
-                state["is_ringing"] = False
-                state["logged_at"] = ""
-                state["paused_at"] = ""
-                state["talked_at"] = ""
-                state["talked_with_number"] = ""
-                state["talked_with_name"] = ""
+                _reset_session_fields(state)
             _sync_derived(state)
 
         if event["Event"] == "QueueMemberPause" and event["Membership"] == "dynamic":

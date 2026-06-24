@@ -471,6 +471,8 @@ class TestSubscribe:
             "QueueMemberRemoved",
             "QueueMemberRinginuse",
             "QueueMemberStatus",
+            "queue_member_agent_associated",
+            "queue_member_agent_dissociated",
         }
 
 
@@ -1157,3 +1159,192 @@ def _build_seed_agent(agent_id, number, queues):
         "talked_with_number": "",
         "talked_with_name": "",
     }
+
+
+def _confd_agent(agent_id, queue_names, tenant=TENANT, number="1001"):
+    """Shape of ``confd.agents.get(agent_id)``: the authoritative roster."""
+    return {
+        "id": agent_id,
+        "number": number,
+        "firstname": "John",
+        "lastname": "Doe",
+        "tenant_uuid": tenant,
+        "queues": [{"name": name} for name in queue_names],
+    }
+
+
+class TestQueueMemberAgentConfdEvents:
+    """confd (dis)association events keep ``configured_queues`` in sync with the
+    confd-configured roster, **independent of login state** (issue #13).
+
+    The plugin otherwise only learns membership from runtime AMI events, so a
+    queue removed from a logged-off agent in confd would never be pruned from
+    ``configured_queues`` until the next process restart.
+    """
+
+    def _seed(self, handler, agent_id, configured, queues=None, paused=None):
+        state = bus_consume._build_agent_state(
+            agent_id,
+            "1001",
+            "John Doe",
+            queues=queues or [],
+            paused_queues=paused or [],
+            home_queue=configured[0] if configured else False,
+            configured_queues=configured,
+        )
+        handler._agents[TENANT] = {agent_id: state}
+        return state
+
+    def test_dissociation_prunes_configured_queues(self, handler):
+        # The reported bug: agent logged off but still configured for the queue;
+        # confd now reports an empty roster after the agent was removed.
+        self._seed(handler, 21, configured=["support-88511897"])
+        handler.confd.agents.get.return_value = _confd_agent(21, [])
+
+        handler._queue_member_agent_dissociated(
+            {"queue_id": 1, "agent_id": 21}
+        )
+
+        agent = handler._agents[TENANT][21]
+        assert agent["configured_queues"] == []
+        # No queue configured at all anymore: the legacy ``queue`` string has no
+        # legitimate home to fall back on, so it is reset to ``False``.
+        assert agent["queue"] is False
+        handler.confd.agents.get.assert_called_once_with(21)
+
+    def test_dissociation_keeps_other_configured_queues(self, handler):
+        self._seed(handler, 3, configured=["support", "test"])
+        handler.confd.agents.get.return_value = _confd_agent(3, ["test"])
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 3})
+
+        agent = handler._agents[TENANT][3]
+        assert agent["configured_queues"] == ["test"]
+        # Still configured for at least one queue: the legacy ``queue`` field
+        # keeps its sticky last-known value (back-compat with v2.0.x clients).
+        assert agent["queue"] == "support"
+
+    def test_dissociation_prunes_runtime_queues_to_keep_invariant(self, handler):
+        # queues ⊆ configured_queues must hold: a runtime queue no longer
+        # configured is dropped from runtime membership and pause too.
+        self._seed(
+            handler,
+            3,
+            configured=["support", "test"],
+            queues=["support", "test"],
+            paused=["test"],
+        )
+        handler.confd.agents.get.return_value = _confd_agent(3, ["support"])
+
+        handler._queue_member_agent_dissociated({"queue_id": 3, "agent_id": 3})
+
+        agent = handler._agents[TENANT][3]
+        assert agent["configured_queues"] == ["support"]
+        assert agent["queues"] == ["support"]
+        assert agent["paused_queues"] == []
+        assert agent["is_logged"] is True
+
+    def test_dissociation_to_empty_resets_session_fields(self, handler):
+        # Pruning the last runtime queue is a full logout: session/device fields
+        # must be cleared like QueueMemberRemoved does, else the published status
+        # shows is_logged=false with stale login/call data.
+        state = self._seed(handler, 7, configured=["test"], queues=["test"])
+        state.update(
+            logged_at="2026-06-17T12:00:00.000000",
+            paused_at="2026-06-17T12:05:00.000000",
+            is_talking=True,
+            is_ringing=True,
+            talked_at="2026-06-17T12:06:00.000000",
+            talked_with_number="1000",
+            talked_with_name="Alice",
+        )
+        handler.confd.agents.get.return_value = _confd_agent(7, [])
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 7})
+
+        agent = handler._agents[TENANT][7]
+        assert agent["queues"] == []
+        assert agent["is_logged"] is False
+        assert agent["logged_at"] == ""
+        assert agent["paused_at"] == ""
+        assert agent["is_talking"] is False
+        assert agent["is_ringing"] is False
+        assert agent["talked_at"] == ""
+        assert agent["talked_with_number"] == ""
+        assert agent["talked_with_name"] == ""
+
+    def test_dissociation_keeping_a_queue_preserves_session_fields(self, handler):
+        # A partial prune (one of several runtime queues) is NOT a logout: the
+        # session fields stay untouched.
+        state = self._seed(
+            handler, 7, configured=["support", "test"], queues=["support", "test"]
+        )
+        state.update(
+            logged_at="2026-06-17T12:00:00.000000", is_talking=True
+        )
+        handler.confd.agents.get.return_value = _confd_agent(7, ["support"])
+
+        handler._queue_member_agent_dissociated({"queue_id": 3, "agent_id": 7})
+
+        agent = handler._agents[TENANT][7]
+        assert agent["queues"] == ["support"]
+        assert agent["logged_at"] == "2026-06-17T12:00:00.000000"
+        assert agent["is_talking"] is True
+
+    def test_dissociation_publishes_updated_status(self, handler):
+        self._seed(handler, 21, configured=["support"])
+        handler.confd.agents.get.return_value = _confd_agent(21, [])
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 21})
+
+        published = _published_events(handler)
+        assert isinstance(published[-1], QueueAgentsStatusEvent)
+        assert published[-1].content == handler._agents[TENANT][21]
+
+    def test_association_adds_to_configured_queues(self, handler):
+        self._seed(handler, 5, configured=["support"])
+        handler.confd.agents.get.return_value = _confd_agent(5, ["support", "sales"])
+
+        handler._queue_member_agent_associated(
+            {"queue_id": 9, "agent_id": 5, "penalty": 0}
+        )
+
+        assert handler._agents[TENANT][5]["configured_queues"] == [
+            "support",
+            "sales",
+        ]
+
+    def test_event_for_unknown_tenant_is_ignored(self, handler):
+        # No state seeded for the tenant confd resolves: nothing to reconcile.
+        handler.confd.agents.get.return_value = _confd_agent(
+            7, ["support"], tenant="other-tenant"
+        )
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 7})
+
+        assert _published_events(handler) == []
+
+    def test_event_for_unknown_agent_is_ignored(self, handler):
+        self._seed(handler, 5, configured=["support"])
+        handler.confd.agents.get.return_value = _confd_agent(99, ["support"])
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 99})
+
+        assert _published_events(handler) == []
+        assert handler._agents[TENANT][5]["configured_queues"] == ["support"]
+
+    def test_malformed_event_without_agent_id_is_dropped(self, handler):
+        handler._queue_member_agent_dissociated({"queue_id": 1})
+
+        handler.confd.agents.get.assert_not_called()
+        assert _published_events(handler) == []
+
+    def test_confd_lookup_failure_is_swallowed(self, handler):
+        self._seed(handler, 5, configured=["support"])
+        handler.confd.agents.get.side_effect = RuntimeError("boom")
+
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 5})
+
+        # State left untouched, no crash, nothing published.
+        assert handler._agents[TENANT][5]["configured_queues"] == ["support"]
+        assert _published_events(handler) == []
