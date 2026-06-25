@@ -679,6 +679,43 @@ class TestMultiQueueMembership:
         assert "support" in configured  # pre-existing runtime queue preserved
         assert "sales" in configured
 
+    def test_member_added_clears_offline_when_device_reachable(self, handler):
+        # A (re)join carries the member's current device Status. When the WDA
+        # reconnected before logging back in, no further QueueMemberStatus
+        # follows the join, so derive is_offline from the Added event itself —
+        # otherwise a reconnected agent stays wrongly flagged offline
+        # (Barbara's bug).
+        agent = self._logged_agent(handler, [])
+        agent["is_offline"] = True
+        event = _member_added_event("support")
+        event["Status"] = "1"  # NOT_INUSE -> device reachable
+
+        handler._queue_member_added(event)
+
+        assert handler._agents[TENANT][5]["is_offline"] is False
+
+    def test_member_added_flags_offline_when_device_unavailable(self, handler):
+        # Mirror case a logout-only reset would miss: an agent added while its
+        # device is still Unavailable (Status 5) must surface as offline
+        # immediately.
+        self._logged_agent(handler, [])
+        event = _member_added_event("support")
+        event["Status"] = "5"
+
+        handler._queue_member_added(event)
+
+        assert handler._agents[TENANT][5]["is_offline"] is True
+
+    def test_member_added_without_status_keeps_offline(self, handler):
+        # Not every source carries Status; its absence must not clobber a
+        # known device state.
+        agent = self._logged_agent(handler, [])
+        agent["is_offline"] = True
+
+        handler._queue_member_added(_member_added_event("support"))  # no Status
+
+        assert handler._agents[TENANT][5]["is_offline"] is True
+
     def test_member_removed_from_one_queue_stays_logged(self, handler):
         self._logged_agent(handler, ["support", "sales"])
 
@@ -706,6 +743,19 @@ class TestMultiQueueMembership:
         assert agent["logged_at"] == ""
         assert agent["talked_at"] == ""
         assert agent["talked_with_number"] == ""
+
+    def test_member_removed_from_last_queue_clears_offline(self, handler):
+        # is_offline tracks the device of a *logged-in* agent. Once the agent
+        # leaves all its queues we no longer receive status updates for it, so a
+        # stale True must not survive the logout and bleed into the next login:
+        # an agent that went offline, was disconnected, then reconnects its WDA
+        # and logs back in would otherwise stay wrongly flagged offline.
+        agent = self._logged_agent(handler, ["support"])
+        agent["is_offline"] = True
+
+        handler._queue_member_removed(_member_removed_event("support"))
+
+        assert handler._agents[TENANT][5]["is_offline"] is False
 
     def test_queue_field_is_first_of_queues(self, handler):
         self._logged_agent(handler, ["support"])
