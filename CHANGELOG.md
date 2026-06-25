@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-06-25
+
+### Fixed
+- **`is_offline` no longer stays stuck `true` across a logout/login cycle.** An
+  agent that went offline (`QueueMemberStatus` Status 5) while logged into a
+  queue, was then disconnected and later reconnected its WDA and logged back
+  in, kept `is_offline: true` in `GET /queues/agents_status` and the
+  `queue_agents_status` event — because nothing cleared the flag after the
+  re-login. Now:
+  - `is_offline` is reset to `false` when an agent leaves **all** its queues
+    (full logout / confd dissociation to empty), so a stale value never bleeds
+    into the next login;
+  - `QueueMemberAdded` derives `is_offline` from the device `Status` the event
+    already carries (Status 5 → offline), so any (re)join reflects the real
+    device state immediately — including an agent added while its device is
+    still unavailable, which a logout-only reset would miss.
+
 ## [2.6.0] - 2026-06-25
 
 ### Added
@@ -215,6 +232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release: Queue REST API and bus events for Asterisk-based queue management.
 
+[2.6.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.4.0...v2.4.1
