@@ -8,30 +8,34 @@ import re
 import threading
 
 from .events import (
+    QueueAgentsStatusEvent,
     QueueCallerAbandonEvent,
     QueueCallerJoinEvent,
     QueueCallerLeaveEvent,
+    QueueLiveStatsEvent,
     QueueMemberAddedEvent,
     QueueMemberPauseEvent,
     QueueMemberPenaltyEvent,
     QueueMemberRemovedEvent,
     QueueMemberRingInUseEvent,
     QueueMemberStatusEvent,
-    QueueLiveStatsEvent,
-    QueueAgentsStatusEvent,
 )
-
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID_FROM_IFACE = re.compile(r"^Local/id-(\d+)@agentcallback$")
 MEMBER_NUM_FROM_AGENT = re.compile(r"^Agent/(\d+)$")
-
 # Fields required to safely process each membership-mutating event. A malformed
 # event missing one of these is dropped (and logged) rather than raising a
 # KeyError that would crash the handler and drop the rest of the batch.
 _REQUIRED_EVENT_FIELDS = {
-    "QueueMemberAdded": ("Membership", "Interface", "MemberName", "Queue", "StateInterface"),
+    "QueueMemberAdded": (
+        "Membership",
+        "Interface",
+        "MemberName",
+        "Queue",
+        "StateInterface",
+    ),
     "QueueMemberRemoved": ("Membership", "Interface", "MemberName", "Queue"),
     "QueueMemberPause": ("Membership", "Interface", "MemberName", "Queue", "Paused"),
 }
@@ -184,7 +188,7 @@ def _build_agent_state(
     return state
 
 
-class QueuesBusEventHandler(object):
+class QueuesBusEventHandler:
     def __init__(self, bus_publisher, confd, agentd):
         self.bus_publisher = bus_publisher
         self.confd = confd
@@ -402,7 +406,9 @@ class QueuesBusEventHandler(object):
 
     def _queue_agents_status(self, tenant_uuid, agent):
         # Caller holds ``self._lock``. Publishes a single agent object.
-        bus_event = QueueAgentsStatusEvent(self._agents[tenant_uuid][agent], tenant_uuid)
+        bus_event = QueueAgentsStatusEvent(
+            self._agents[tenant_uuid][agent], tenant_uuid
+        )
         self.bus_publisher.publish(bus_event)
 
     def get_agents_status(self, tenant_uuid: str) -> dict:
@@ -423,8 +429,8 @@ class QueuesBusEventHandler(object):
                         ),
                         None,
                     )
-                    runtime_queues, paused_queues, all_queues = (
-                        _membership_from_status(status)
+                    runtime_queues, paused_queues, all_queues = _membership_from_status(
+                        status
                     )
                     # The full configured roster: agentd reports every queue the
                     # agent is configured for (with per-queue flags), falling
@@ -516,18 +522,26 @@ class QueuesBusEventHandler(object):
                     missing,
                 )
                 return
-
         # Check if agents for this tenant exists
         if event["Event"] != "QueueCallerLeave" and event["Membership"] == "dynamic":
             interface = AGENT_ID_FROM_IFACE.match(event["Interface"])
+            # A dynamic member's Interface is always the agent callback form the
+            # regex expects; assert the invariant to narrow the type for mypy
+            # without changing runtime behaviour (an unparseable interface still
+            # aborts the handler before it republishes anything, as before).
+            assert (
+                interface is not None
+            ), f"unexpected dynamic member Interface: {event.get('Interface')!r}"
             agent = int(interface.group(1))
             if not agents.get(tenant_uuid):
                 self.get_agents_status(tenant_uuid)
             if not agents[tenant_uuid].get(agent):
                 member = MEMBER_NUM_FROM_AGENT.match(event["MemberName"])
+                assert (
+                    member is not None
+                ), f"unexpected agent MemberName: {event.get('MemberName')!r}"
                 member_num = int(member.group(1))
                 self.add_agent(tenant_uuid, agent, member_num)
-
         # QueueCallerLeave Get info about call
         if (
             event["Event"] == "QueueCallerLeave"
@@ -546,7 +560,6 @@ class QueuesBusEventHandler(object):
                             ]
                             agent = k
                             break
-
         # QueueMemberStatus
         if event["Event"] == "QueueMemberStatus" and event["Membership"] == "dynamic":
             state = agents[tenant_uuid][agent]
@@ -730,7 +743,6 @@ class QueuesBusEventHandler(object):
                 for call in stats[name]["waiting_calls"]
                 if call["uniqueid"] != event["Uniqueid"]
             ]
-
         # Set color depending on limit value
         stats[name]["count_color"] = "green"
         if stats[name]["count"] > 1:

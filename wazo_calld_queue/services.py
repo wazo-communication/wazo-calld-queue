@@ -4,12 +4,12 @@
 import logging
 
 from wazo_agentd_client.error import (
-    AgentdClientError,
     ALREADY_IN_QUEUE,
-    NOT_IN_QUEUE,
-    NOT_LOGGED,
     NO_SUCH_AGENT,
     NO_SUCH_QUEUE,
+    NOT_IN_QUEUE,
+    NOT_LOGGED,
+    AgentdClientError,
 )
 
 from .exceptions import (
@@ -22,13 +22,12 @@ from .exceptions import (
 )
 
 logger = logging.getLogger(__name__)
-
 # AMI ExtensionState ``Status`` for a device with no registered contact: the
 # agent application (WDA) is not connected, so the agent cannot take calls.
 EXTENSION_STATE_UNAVAILABLE = "4"
 
 
-class QueueService(object):
+class QueueService:
     def __init__(self, amid, confd, ari, agentd, publisher):
         self.amid = amid
         self.confd = confd
@@ -38,7 +37,7 @@ class QueueService(object):
 
     def list_queues(self):
         queues = self.amid.action("queuesummary")
-        q = []
+        q: list = []
         for queue in queues:
             if queue.get("Event") == "QueueSummary":
                 q.append(self._queues(queue))
@@ -47,7 +46,7 @@ class QueueService(object):
 
     def get_queue(self, queue_name):
         queue = self.amid.action("queuestatus", {"Queue": queue_name})
-        q = {"members": []}
+        q: dict = {"members": []}
         for ev in queue:
             if ev.get("Event") == "QueueParams":
                 q.update(self._queue(ev))
@@ -80,9 +79,7 @@ class QueueService(object):
         return self.amid.action("queuepause", pause_member)
 
     def connect_agent(self, queue_name, agent_id, supervisor_uuid, tenant_uuid):
-        queue_id = self._authorize_supervisor(
-            supervisor_uuid, queue_name, tenant_uuid
-        )
+        queue_id = self._authorize_supervisor(supervisor_uuid, queue_name, tenant_uuid)
         # The agent's application (WDA) must be connected before we connect it
         # to a queue: an agent may still hold an agentd session while its device
         # is Unavailable (websocket KO — see is_offline / "case 1"), and
@@ -115,9 +112,7 @@ class QueueService(object):
         )
 
     def disconnect_agent(self, queue_name, agent_id, supervisor_uuid, tenant_uuid):
-        queue_id = self._authorize_supervisor(
-            supervisor_uuid, queue_name, tenant_uuid
-        )
+        queue_id = self._authorize_supervisor(supervisor_uuid, queue_name, tenant_uuid)
         self._delegate(
             self.agentd.agents.agent_logoff_from_queue,
             agent_id,

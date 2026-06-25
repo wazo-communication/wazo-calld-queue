@@ -1,0 +1,50 @@
+# See https://pre-commit.com for more information
+# Mirrors the upstream wazo-calld toolchain; tool revs are pinned to versions
+# that run on modern Python (3.12+) while still targeting py311 output.
+repos:
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        # Required to make flake8 read its config from pyproject.toml.
+        additional_dependencies: ["flake8-pyproject"]
+  - repo: https://github.com/psf/black
+    rev: 26.5.1
+    hooks:
+      - id: black
+  # Automatically update to modern python syntax (as allowed by the target).
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.21.2
+    hooks:
+      - id: pyupgrade
+        args: [--py311-plus]
+  # Automatically sort and format imports (in a black-compatible way).
+  - repo: https://github.com/pycqa/isort
+    rev: 8.0.1
+    hooks:
+      - id: isort
+        args: ["--lbi", "1", "--filter-files"]
+  # Static type checking.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        # Type-check the source packages only. The test suite stubs the Wazo
+        # stack via dynamic ``types.ModuleType`` injection in conftest.py, which
+        # is intentionally untypeable; mirrors the [tool.mypy] files= scope.
+        files: ^(wazo_calld_queue|wazo_call_logd_queue)/
+        additional_dependencies:
+          - "types-pyyaml"
+          - "types-requests"
+          - "types-setuptools"
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+  - repo: https://github.com/wazo-platform/wazo-git-hooks
+    rev: 1.1.1
+    hooks:
+      - id: wazo-copyright-check

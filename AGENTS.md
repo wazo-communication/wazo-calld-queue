@@ -70,6 +70,18 @@ Version source: `wazo/plugin.yml`.
 - Use conventional commits: `feat:`, `fix:`, `chore:`, etc.
 - Keep the version number in `wazo/plugin.yml`.
 
+## Code quality
+
+- `pre-commit` orchestrates `black`, `isort`, `flake8`, `pyupgrade`, `mypy`
+  and the Wazo copyright-header check. Config: `pyproject.toml` +
+  `.pre-commit-config.yaml`, mirrored from upstream `wazo-calld` — **except**
+  black runs *with* string normalization here (everything is double-quoted) for
+  one consistent style across the repo.
+- Run locally: `pre-commit run --all-files`, or `tox -e linters`.
+- flake8 reads its config from `pyproject.toml` via `flake8-pyproject`;
+  `max-line-length = 99`, `E203`/`E501`/`W503` ignored (black owns wrapping).
+- CI (`.github/workflows/ci.yml`) runs the linters and `pytest` on every PR.
+
 ## Testing
 
 - Install dev deps: `pip install -r requirements-test.txt`.

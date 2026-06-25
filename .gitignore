@@ -3,3 +3,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv-test/
+.tox/
+.mypy_cache/
+.coverage
+coverage.xml
+unit-tests.xml
+*.egg-info/

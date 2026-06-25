@@ -1,20 +1,17 @@
-# -*- coding: utf-8 -*-
 # Copyright 2017-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
-
 from flask import request
-from xivo.tenant_flask_helpers import Tenant
-
 from wazo_calld.auth import get_token_user_uuid_from_request, required_acl
 from wazo_calld.http import AuthResource
+from xivo.tenant_flask_helpers import Tenant
 
 from .schema import (
     intercept_schema,
     queue_agent_action_schema,
     queue_list_schema,
-    queue_schema,
     queue_member_schema,
+    queue_schema,
 )
 
 
