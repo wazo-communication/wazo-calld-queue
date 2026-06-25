@@ -549,28 +549,34 @@ class QueuesBusEventHandler(object):
 
         # QueueMemberStatus
         if event["Event"] == "QueueMemberStatus" and event["Membership"] == "dynamic":
-            if event["Status"] == "5":
-                # WDA is disconnected - websocket KO
-                agents[tenant_uuid][agent]["is_offline"] = True
+            state = agents[tenant_uuid][agent]
+            # ``is_offline`` tracks the device/WDA reachability of a *logged-in*
+            # agent: Asterisk reports Status 5 (Unavailable) when the member's
+            # device is unregistered — i.e. the WDA websocket is KO while the
+            # agent is still logged into the queue. Every other status means the
+            # device is reachable, so derive ``is_offline`` from the status on
+            # each event rather than only clearing it on hangup (Status 1):
+            # a WDA that reconnects straight into a ringing/in-call state
+            # (Status 6/2) would otherwise stay wrongly flagged offline.
+            state["is_offline"] = event["Status"] == "5"
             if event["Status"] == "6":
                 # Ringing
-                agents[tenant_uuid][agent]["is_ringing"] = True
+                state["is_ringing"] = True
             if event["Status"] == "2":
                 # In comm
-                agents[tenant_uuid][agent]["is_talking"] = True
-                agents[tenant_uuid][agent]["is_ringing"] = False
-                agents[tenant_uuid][agent]["talked_at"] = (
-                    datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+                state["is_talking"] = True
+                state["is_ringing"] = False
+                state["talked_at"] = datetime.datetime.now().strftime(
+                    "%Y-%m-%dT%H:%M:%S.%f"
                 )
 
             if event["Status"] == "1":
                 # Hangup
-                agents[tenant_uuid][agent]["is_talking"] = False
-                agents[tenant_uuid][agent]["is_ringing"] = False
-                agents[tenant_uuid][agent]["is_offline"] = False
-                agents[tenant_uuid][agent]["talked_at"] = ""
-                agents[tenant_uuid][agent]["talked_with_number"] = ""
-                agents[tenant_uuid][agent]["talked_with_name"] = ""
+                state["is_talking"] = False
+                state["is_ringing"] = False
+                state["talked_at"] = ""
+                state["talked_with_number"] = ""
+                state["talked_with_name"] = ""
 
         if event["Event"] == "QueueMemberAdded" and event["Membership"] == "dynamic":
             # Handle connection to a queue (an agent may serve several queues)

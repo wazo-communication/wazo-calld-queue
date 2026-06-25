@@ -18,9 +18,15 @@ from wazo_calld_queue.exceptions import (
     AgentdUpstreamError,
     AgentHasNoLine,
     AgentNotLogged,
+    AgentWdaNotConnected,
     NoSuchAgentOrQueue,
     SupervisorNotInQueue,
 )
+
+# AMI ExtensionState ``Status`` codes (AST_EXTENSION_*): 0 idle / reachable,
+# 4 unavailable (device unregistered -> WDA application disconnected).
+WDA_CONNECTED = "0"
+WDA_UNAVAILABLE = "4"
 from wazo_calld_queue.services import QueueService
 
 
@@ -186,21 +192,50 @@ class TestConnectDisconnectAgent:
     """Per-queue connect/disconnect: authorize the supervisor against the
     target queue (confd), then delegate to agentd."""
 
-    def _authorize_supervisor_for(self, service, queue_name="support", queue_id=42):
-        service.confd.users.get.return_value = {"agent": {"id": 7}}
-        service.confd.agents.get.return_value = {
-            "queues": [{"id": queue_id, "name": queue_name}]
+    def _authorize_supervisor_for(
+        self,
+        service,
+        queue_name="support",
+        queue_id=42,
+        target_agent_id=3,
+        user_uuid="user-3",
+        lines=None,
+        wda_status=WDA_CONNECTED,
+    ):
+        """Supervisor authorized for the queue; the target agent already has an
+        agentd session (``agent_login_to_queue`` succeeds) and resolves to a
+        user with a line whose device (WDA) reports ``wda_status``."""
+        if lines is None:
+            lines = [{"extensions": [{"exten": "1001", "context": "default"}]}]
+        users = {
+            "sup-uuid": {"agent": {"id": 7}},
+            user_uuid: {"lines": lines},
         }
+        agents = {
+            7: {"queues": [{"id": queue_id, "name": queue_name}]},
+            target_agent_id: {
+                "id": target_agent_id,
+                "users": [{"uuid": user_uuid}],
+                "queues": [{"id": queue_id, "name": queue_name}],
+            },
+        }
+        service.confd.users.get.side_effect = (
+            lambda uuid, tenant_uuid=None: users[uuid]
+        )
+        service.confd.agents.get.side_effect = (
+            lambda agent_id, tenant_uuid=None: agents[agent_id]
+        )
+        service.amid.action.return_value = [
+            {"Response": "Success", "Status": wda_status}
+        ]
 
     def test_connect_authorized_delegates_to_agentd(self, service):
         self._authorize_supervisor_for(service)
 
         service.connect_agent("support", 3, "sup-uuid", "t1")
 
-        service.confd.users.get.assert_called_once_with(
-            "sup-uuid", tenant_uuid="t1"
-        )
-        service.confd.agents.get.assert_called_once_with(7, tenant_uuid="t1")
+        service.confd.users.get.assert_any_call("sup-uuid", tenant_uuid="t1")
+        service.confd.agents.get.assert_any_call(7, tenant_uuid="t1")
         service.agentd.agents.agent_login_to_queue.assert_called_once_with(
             3, 42, tenant_uuid="t1"
         )
@@ -221,10 +256,8 @@ class TestConnectDisconnectAgent:
 
         service.connect_agent("support", 3, "sup-uuid", "tenant-b")
 
-        service.confd.users.get.assert_called_once_with(
-            "sup-uuid", tenant_uuid="tenant-b"
-        )
-        service.confd.agents.get.assert_called_once_with(7, tenant_uuid="tenant-b")
+        service.confd.users.get.assert_any_call("sup-uuid", tenant_uuid="tenant-b")
+        service.confd.agents.get.assert_any_call(7, tenant_uuid="tenant-b")
         service.agentd.agents.agent_login_to_queue.assert_called_once_with(
             3, 42, tenant_uuid="tenant-b"
         )
@@ -288,6 +321,10 @@ class TestConnectDisconnectAgent:
             AgentdClientError(NOT_LOGGED),
             None,
         ]
+        # The agent's WDA device is reachable so the pre-connect check passes.
+        service.amid.action.return_value = [
+            {"Response": "Success", "Status": WDA_CONNECTED}
+        ]
 
     def test_connect_not_logged_performs_full_login(self, service):
         # An agent authenticated to WDA but with no agentd session must be
@@ -332,6 +369,31 @@ class TestConnectDisconnectAgent:
 
         service.agentd.agents.login_agent.assert_not_called()
         service.agentd.agents.agent_logoff_from_queue.assert_not_called()
+
+    def test_connect_rejected_when_wda_not_connected(self, service):
+        # Case 1 at connect time: the agent may still hold an agentd session,
+        # but its WDA/device is Unavailable. Reject with a clear 409 so the
+        # front can warn the supervisor, and never touch agentd.
+        self._authorize_supervisor_for(service, wda_status=WDA_UNAVAILABLE)
+
+        with pytest.raises(AgentWdaNotConnected) as exc:
+            service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        assert exc.value.status_code == 409
+        assert exc.value.id_ == "agent-wda-not-connected"
+        service.agentd.agents.agent_login_to_queue.assert_not_called()
+        service.agentd.agents.login_agent.assert_not_called()
+
+    def test_connect_checks_wda_on_agent_extension(self, service):
+        # The WDA check queries the device state of the agent's own line
+        # (resolved exten/context), not the supervisor's.
+        self._authorize_supervisor_for(service)
+
+        service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.amid.action.assert_called_once_with(
+            "ExtensionState", {"Exten": "1001", "Context": "default"}
+        )
 
     def test_connect_not_logged_without_line_raises_400(self, service):
         self._setup_fresh_login(service, lines=[])

@@ -23,6 +23,16 @@ class AgentNotLogged(APIException):
         )
 
 
+class AgentWdaNotConnected(APIException):
+    def __init__(self, agent_id):
+        super().__init__(
+            409,
+            'Agent application (WDA) is not connected; cannot connect agent to queue',
+            'agent-wda-not-connected',
+            details={'agent_id': agent_id},
+        )
+
+
 class AgentHasNoLine(APIException):
     def __init__(self, agent_id):
         super().__init__(

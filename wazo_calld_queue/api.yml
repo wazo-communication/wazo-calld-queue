@@ -121,6 +121,14 @@ paths:
         in on its own line (resolved from confd) and joined to *only* this
         queue. A `400` is returned only when the agent has no line to log in
         on.
+
+
+        Before connecting, the agent's application (WDA) must be connected: its
+        device must be registered. If the device is unavailable (websocket KO),
+        the request is rejected with `409` (`agent-wda-not-connected`) so the
+        supervisor can be told to have the agent reconnect first — this also
+        catches an agent that still holds a `wazo-agentd` session while its WDA
+        has dropped.
       parameters:
         - $ref: '#/parameters/QueueName'
         - $ref: '#/parameters/QueueAgentAction'
@@ -135,6 +143,10 @@ paths:
           description: The supervisor is not a member of this queue
         '404':
           description: No such agent or queue
+        '409':
+          description: >-
+            The agent's application (WDA) is not connected
+            (`agent-wda-not-connected`)
         '503':
           $ref: '#/responses/AnotherServiceUnavailable'
   /queues/{queue_name}/disconnect:

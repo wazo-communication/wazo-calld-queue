@@ -555,6 +555,46 @@ class TestMemberEventHandlers:
         assert agent["is_ringing"] is False
         assert agent["talked_at"] != ""
 
+    def _status_event(self, status, agent_id=5, member="1001", queue="support"):
+        return {
+            "Event": "QueueMemberStatus",
+            "Membership": "dynamic",
+            "Interface": f"Local/id-{agent_id}@agentcallback",
+            "MemberName": f"Agent/{member}",
+            "Queue": queue,
+            "Status": status,
+            "ChanVariable": {"WAZO_TENANT_UUID": TENANT},
+        }
+
+    def test_member_status_unavailable_flags_offline(self, handler):
+        # A logged-in agent whose WDA/device goes Unavailable (Status 5) must be
+        # flagged is_offline so a supervisor sees the websocket is KO.
+        handler._agents[TENANT] = {
+            5: {"id": 5, "number": "1001", "queues": ["support"], "is_offline": False}
+        }
+
+        handler._queue_member_status(self._status_event("5"))
+
+        assert handler._agents[TENANT][5]["is_offline"] is True
+
+    def test_member_status_available_clears_offline(self, handler):
+        # A WDA that reconnects straight into a non-idle state (ringing / in call)
+        # reports Status 6 / 2, not 1: is_offline must still clear, otherwise an
+        # online agent stays wrongly flagged offline until the next hangup.
+        for status in ("1", "2", "6"):
+            handler._agents[TENANT] = {
+                5: {
+                    "id": 5,
+                    "number": "1001",
+                    "queues": ["support"],
+                    "is_offline": True,
+                }
+            }
+
+            handler._queue_member_status(self._status_event(status))
+
+            assert handler._agents[TENANT][5]["is_offline"] is False, status
+
 
 class TestCallerEventHandlers:
     def test_caller_join_publishes_livestats_and_caller_event(self, handler):
