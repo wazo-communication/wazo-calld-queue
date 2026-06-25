@@ -29,6 +29,10 @@ repos:
     rev: v2.1.0
     hooks:
       - id: mypy
+        # Type-check the source packages only. The test suite stubs the Wazo
+        # stack via dynamic ``types.ModuleType`` injection in conftest.py, which
+        # is intentionally untypeable; mirrors the [tool.mypy] files= scope.
+        files: ^(wazo_calld_queue|wazo_call_logd_queue)/
         additional_dependencies:
           - "types-pyyaml"
           - "types-requests"
