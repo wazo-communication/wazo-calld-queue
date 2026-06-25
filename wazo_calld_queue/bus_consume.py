@@ -77,9 +77,15 @@ def _reset_session_fields(state):
     Shared by ``QueueMemberRemoved`` (last runtime queue left) and
     ``_sync_configured_queues`` (a confd dissociation pruned the last runtime
     queue), so a published ``is_logged: false`` status never carries stale
-    login/call data. ``is_offline`` is intentionally left untouched (it tracks
-    the websocket/device, not the queue session).
+    login/call data. ``is_offline`` is reset too: it tracks the device/WDA of a
+    *logged-in* agent via ``QueueMemberStatus`` events, and once the agent has
+    left all its queues no such event follows — so a stale ``True`` would
+    otherwise survive the logout and bleed into the next login (an agent that
+    went offline, was disconnected, then reconnected its WDA and logged back in
+    would stay wrongly flagged offline). ``False`` matches the neutral default
+    of a freshly-seeded agent (see ``_build_agent_state``).
     """
+    state["is_offline"] = False
     state["is_talking"] = False
     state["is_ringing"] = False
     state["logged_at"] = ""
@@ -608,6 +614,15 @@ class QueuesBusEventHandler:
             if event["Queue"] not in state["configured_queues"]:
                 state["configured_queues"].append(event["Queue"])
             state["interface"] = event["StateInterface"]
+            # A (re)join carries the member's current device Status, so reflect
+            # it on the agent as QueueMemberStatus does (Status 5 = Unavailable
+            # = WDA device unregistered). This refreshes is_offline at the join
+            # itself — crucial when an agent reconnects its WDA and logs back in
+            # without any later status event to clear a stale offline flag. Only
+            # act when the event actually carries Status, so a source that omits
+            # it never clobbers a known device state.
+            if "Status" in event:
+                state["is_offline"] = event["Status"] == "5"
             if not state.get("logged_at"):
                 # LoginTime: set on first observed queue join, kept across
                 # further joins. Keying on the empty timestamp (rather than on
