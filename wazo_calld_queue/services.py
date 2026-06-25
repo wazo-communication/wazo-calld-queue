@@ -14,6 +14,7 @@ from wazo_agentd_client.error import (
 
 from .exceptions import (
     AgentdUpstreamError,
+    AgentHasNoLine,
     AgentNotLogged,
     NoSuchAgentOrQueue,
     SupervisorNotInQueue,
@@ -77,9 +78,17 @@ class QueueService(object):
         queue_id = self._authorize_supervisor(
             supervisor_uuid, queue_name, tenant_uuid
         )
-        self._delegate(
-            self.agentd.agents.agent_login_to_queue, agent_id, queue_id, tenant_uuid
-        )
+        try:
+            self._delegate(
+                self.agentd.agents.agent_login_to_queue,
+                agent_id,
+                queue_id,
+                tenant_uuid,
+            )
+        except AgentNotLogged:
+            # The agent is authenticated to WDA but has no agentd session yet:
+            # log it in on its own line, then keep only the selected queue.
+            self._login_agent_to_single_queue(agent_id, queue_id, tenant_uuid)
         logger.info(
             "supervisor %s connected agent %s to queue %s (id %s, tenant %s)",
             supervisor_uuid,
@@ -119,6 +128,44 @@ class QueueService(object):
             if queue.get("name") == queue_name:
                 return queue["id"]
         raise SupervisorNotInQueue(queue_name)
+
+    def _login_agent_to_single_queue(self, agent_id, queue_id, tenant_uuid):
+        """Full agentd login for an agent without a session, then enforce
+        strict single-queue membership on the selected queue.
+
+        ``login_agent`` makes the agent join *every* queue it is configured
+        for in confd, so we prune the others and (re)ensure the selected one
+        (which may not be one of the agent's configured queues).
+        """
+        agent = self.confd.agents.get(agent_id, tenant_uuid=tenant_uuid)
+        extension, context = self._resolve_agent_line(agent_id, agent, tenant_uuid)
+        self.agentd.agents.login_agent(
+            agent_id, extension, context, tenant_uuid=tenant_uuid
+        )
+        for queue in agent.get("queues") or []:
+            if queue["id"] != queue_id:
+                self._delegate(
+                    self.agentd.agents.agent_logoff_from_queue,
+                    agent_id,
+                    queue["id"],
+                    tenant_uuid,
+                )
+        self._delegate(
+            self.agentd.agents.agent_login_to_queue, agent_id, queue_id, tenant_uuid
+        )
+
+    def _resolve_agent_line(self, agent_id, agent, tenant_uuid):
+        """Resolve the agent's (extension, context) from confd via its user's
+        primary line. Raise ``AgentHasNoLine`` if none is configured."""
+        for user in agent.get("users") or []:
+            full_user = self.confd.users.get(user["uuid"], tenant_uuid=tenant_uuid)
+            for line in full_user.get("lines") or []:
+                for extension in line.get("extensions") or []:
+                    exten = extension.get("exten")
+                    context = extension.get("context")
+                    if exten and context:
+                        return exten, context
+        raise AgentHasNoLine(agent_id)
 
     def _delegate(self, action, agent_id, queue_id, tenant_uuid):
         try:

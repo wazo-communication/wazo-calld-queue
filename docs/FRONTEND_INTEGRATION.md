@@ -100,12 +100,18 @@ agent that is itself a member of `{queue_name}`. The action is delegated to
 `queue_agents_status` event (the target agent's `queues` gains/loses the queue),
 so a client only needs to keep merging that event as usual.
 
+If the targeted agent is authenticated to the app but has **no active
+`wazo-agentd` session** (it never took its post), `connect` performs a full
+agent login on its own line (the extension/context are resolved from confd) and
+then leaves it in **only** the selected queue. So a supervisor can connect an
+agent from cold, not just move an already-logged-in agent between queues.
+
 Error codes:
 
 | Code | Meaning |
 |---|---|
 | `204` | Done. Also returned when the agent is **already** (dis)connected (idempotent). |
-| `400` | The targeted agent has no active session — it must log in before being connected. |
+| `400` | The targeted agent has no line to log in on (`connect`), or no active session (`disconnect`). |
 | `403` | The caller is not a member of `{queue_name}` (not allowed to supervise it). |
 | `404` | No such agent or queue. |
 | `502` | Unexpected error from `wazo-agentd`. |

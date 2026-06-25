@@ -115,6 +115,12 @@ paths:
         request is rejected. Delegated to `wazo-agentd`; the change is reflected
         through the existing `queue_agents_status` event (no dedicated event).
         Already-connected agents return `204` (idempotent).
+
+
+        If the targeted agent has no active `wazo-agentd` session, it is logged
+        in on its own line (resolved from confd) and joined to *only* this
+        queue. A `400` is returned only when the agent has no line to log in
+        on.
       parameters:
         - $ref: '#/parameters/QueueName'
         - $ref: '#/parameters/QueueAgentAction'
@@ -124,7 +130,7 @@ paths:
         '204':
           description: Agent has been connected to the queue
         '400':
-          description: The targeted agent has no active session (must log in first)
+          description: The targeted agent has no line to log in on
         '403':
           description: The supervisor is not a member of this queue
         '404':

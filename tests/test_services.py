@@ -16,6 +16,7 @@ from wazo_agentd_client.error import (
 
 from wazo_calld_queue.exceptions import (
     AgentdUpstreamError,
+    AgentHasNoLine,
     AgentNotLogged,
     NoSuchAgentOrQueue,
     SupervisorNotInQueue,
@@ -247,16 +248,99 @@ class TestConnectDisconnectAgent:
 
         service.agentd.agents.agent_login_to_queue.assert_not_called()
 
-    def test_connect_agent_not_logged_raises_400(self, service):
-        self._authorize_supervisor_for(service)
-        service.agentd.agents.agent_login_to_queue.side_effect = AgentdClientError(
-            NOT_LOGGED
+    def _setup_fresh_login(
+        self,
+        service,
+        queue_id=42,
+        queue_name="support",
+        target_agent_id=3,
+        target_queues=None,
+        user_uuid="user-3",
+        lines=None,
+    ):
+        """Supervisor authorized for the queue; target agent (not yet logged
+        into agentd) resolves to a user with a line/extension via confd."""
+        if target_queues is None:
+            target_queues = [{"id": queue_id, "name": queue_name}]
+        if lines is None:
+            lines = [{"extensions": [{"exten": "1001", "context": "default"}]}]
+        users = {
+            "sup-uuid": {"agent": {"id": 7}},
+            user_uuid: {"lines": lines},
+        }
+        agents = {
+            7: {"queues": [{"id": queue_id, "name": queue_name}]},
+            target_agent_id: {
+                "id": target_agent_id,
+                "users": [{"uuid": user_uuid}],
+                "queues": target_queues,
+            },
+        }
+        service.confd.users.get.side_effect = (
+            lambda uuid, tenant_uuid=None: users[uuid]
+        )
+        service.confd.agents.get.side_effect = (
+            lambda agent_id, tenant_uuid=None: agents[agent_id]
+        )
+        # First connect attempt fails (no agentd session), the post-login
+        # "ensure selected queue" call then succeeds.
+        service.agentd.agents.agent_login_to_queue.side_effect = [
+            AgentdClientError(NOT_LOGGED),
+            None,
+        ]
+
+    def test_connect_not_logged_performs_full_login(self, service):
+        # An agent authenticated to WDA but with no agentd session must be
+        # logged in (login_agent) on its own line, not rejected with 400.
+        self._setup_fresh_login(service)
+
+        service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.confd.users.get.assert_any_call("user-3", tenant_uuid="t1")
+        service.agentd.agents.login_agent.assert_called_once_with(
+            3, "1001", "default", tenant_uuid="t1"
         )
 
-        with pytest.raises(AgentNotLogged) as exc:
+    def test_connect_not_logged_keeps_only_selected_queue(self, service):
+        # A full login joins every configured queue; strict single-queue
+        # connect prunes the others and ensures the selected one.
+        self._setup_fresh_login(
+            service,
+            target_queues=[
+                {"id": 42, "name": "support"},
+                {"id": 99, "name": "sales"},
+            ],
+        )
+
+        service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.agentd.agents.agent_logoff_from_queue.assert_called_once_with(
+            3, 99, tenant_uuid="t1"
+        )
+        # The selected queue is (re)ensured after login.
+        assert (
+            service.agentd.agents.agent_login_to_queue.call_args_list[-1].args
+            == (3, 42)
+        )
+
+    def test_connect_already_logged_does_not_relogin(self, service):
+        # Additive per-queue connect for an already-logged-in agent must not
+        # trigger a full login nor prune its other queues.
+        self._authorize_supervisor_for(service)
+
+        service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.agentd.agents.login_agent.assert_not_called()
+        service.agentd.agents.agent_logoff_from_queue.assert_not_called()
+
+    def test_connect_not_logged_without_line_raises_400(self, service):
+        self._setup_fresh_login(service, lines=[])
+
+        with pytest.raises(AgentHasNoLine) as exc:
             service.connect_agent("support", 3, "sup-uuid", "t1")
 
         assert exc.value.status_code == 400
+        service.agentd.agents.login_agent.assert_not_called()
 
     def test_no_such_queue_raises_404(self, service):
         self._authorize_supervisor_for(service)
