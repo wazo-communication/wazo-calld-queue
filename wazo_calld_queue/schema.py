@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
 # Copyright 2018-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
 from marshmallow import (
-    fields,
     Schema,
+    fields,
 )
 from marshmallow.validate import Length
-
 from wazo_calld.plugin_helpers.mallow import StrictDict
 
 
@@ -24,6 +22,7 @@ class QueueListSchema(Schema):
     class Meta:
         strict = True
 
+
 class QueueSchema(Schema):
     queue = fields.Str(validate=Length(min=1))
     talk_time = fields.Integer()
@@ -37,8 +36,12 @@ class QueueSchema(Schema):
     strategy = fields.Str()
     max = fields.Integer()
     calls = fields.Integer()
-    members = fields.List(StrictDict(key_field=fields.String(required=True, validate=Length(min=1)),
-                                     value_field=fields.String(required=True, validate=Length(min=1))))
+    members = fields.List(
+        StrictDict(
+            key_field=fields.String(required=True, validate=Length(min=1)),
+            value_field=fields.String(required=True, validate=Length(min=1)),
+        )
+    )
 
     class Meta:
         strict = True
@@ -56,6 +59,7 @@ class QueueMemberSchema(Schema):
     class Meta:
         strict = True
 
+
 class InterceptSchema(Schema):
     queue_name = fields.Str(validate=Length(min=1))
     call_id = fields.Str()
@@ -67,6 +71,7 @@ class QueueAgentActionSchema(Schema):
 
     class Meta:
         strict = True
+
 
 intercept_schema = InterceptSchema()
 queue_list_schema = QueueListSchema()

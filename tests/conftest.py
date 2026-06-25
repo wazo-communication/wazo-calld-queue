@@ -12,7 +12,6 @@ into ``sys.modules`` before the plugin package is imported.
 
 import sys
 import types
-
 from unittest.mock import Mock
 
 import pytest
@@ -61,7 +60,6 @@ def _install_wazo_calld_stub():
     """
     if "wazo_calld" in sys.modules:
         return
-
     from marshmallow import fields
 
     class StrictDict(fields.Field):
@@ -100,9 +98,7 @@ def _install_xivo_stub():
         return
 
     class APIException(Exception):
-        def __init__(
-            self, status_code, message, error_id, details=None, resource=None
-        ):
+        def __init__(self, status_code, message, error_id, details=None, resource=None):
             super().__init__(message)
             self.status_code = status_code
             self.message = message

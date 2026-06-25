@@ -1,28 +1,27 @@
-# -*- coding: utf-8 -*-
 # Copyright 2018-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
+from wazo_agentd_client import Client as AgentdClient
 from wazo_amid_client import Client as AmidClient
 from wazo_confd_client import Client as ConfdClient
-from wazo_agentd_client import Client as AgentdClient
 
+from .bus_consume import QueuesBusEventHandler
 from .resources import (
     InterceptResource,
-    QueuesResource,
-    QueueResource,
     QueueAddMemberResource,
-    QueueRemoveMemberResource,
-    QueuePauseMemberResource,
-    QueueLiveStatsResource,
     QueueAgentsStatusResource,
     QueueConnectAgentResource,
     QueueDisconnectAgentResource,
+    QueueLiveStatsResource,
+    QueuePauseMemberResource,
+    QueueRemoveMemberResource,
+    QueueResource,
+    QueuesResource,
 )
 from .services import QueueService
-from .bus_consume import QueuesBusEventHandler
 
 
-class Plugin(object):
+class Plugin:
     def load(self, dependencies):
         api = dependencies["api"]
         ari = dependencies["ari"]

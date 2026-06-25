@@ -4,30 +4,28 @@
 from unittest.mock import Mock
 
 import pytest
-
 from wazo_agentd_client.error import (
-    AgentdClientError,
     ALREADY_IN_QUEUE,
-    NOT_IN_QUEUE,
-    NOT_LOGGED,
     NO_SUCH_AGENT,
     NO_SUCH_QUEUE,
+    NOT_IN_QUEUE,
+    NOT_LOGGED,
+    AgentdClientError,
 )
 
 from wazo_calld_queue.exceptions import (
     AgentdUpstreamError,
     AgentHasNoLine,
-    AgentNotLogged,
     AgentWdaNotConnected,
     NoSuchAgentOrQueue,
     SupervisorNotInQueue,
 )
+from wazo_calld_queue.services import QueueService
 
 # AMI ExtensionState ``Status`` codes (AST_EXTENSION_*): 0 idle / reachable,
 # 4 unavailable (device unregistered -> WDA application disconnected).
 WDA_CONNECTED = "0"
 WDA_UNAVAILABLE = "4"
-from wazo_calld_queue.services import QueueService
 
 
 @pytest.fixture
@@ -219,9 +217,7 @@ class TestConnectDisconnectAgent:
                 "queues": [{"id": queue_id, "name": queue_name}],
             },
         }
-        service.confd.users.get.side_effect = (
-            lambda uuid, tenant_uuid=None: users[uuid]
-        )
+        service.confd.users.get.side_effect = lambda uuid, tenant_uuid=None: users[uuid]
         service.confd.agents.get.side_effect = (
             lambda agent_id, tenant_uuid=None: agents[agent_id]
         )
@@ -309,9 +305,7 @@ class TestConnectDisconnectAgent:
                 "queues": target_queues,
             },
         }
-        service.confd.users.get.side_effect = (
-            lambda uuid, tenant_uuid=None: users[uuid]
-        )
+        service.confd.users.get.side_effect = lambda uuid, tenant_uuid=None: users[uuid]
         service.confd.agents.get.side_effect = (
             lambda agent_id, tenant_uuid=None: agents[agent_id]
         )
@@ -355,9 +349,9 @@ class TestConnectDisconnectAgent:
             3, 99, tenant_uuid="t1"
         )
         # The selected queue is (re)ensured after login.
-        assert (
-            service.agentd.agents.agent_login_to_queue.call_args_list[-1].args
-            == (3, 42)
+        assert service.agentd.agents.agent_login_to_queue.call_args_list[-1].args == (
+            3,
+            42,
         )
 
     def test_connect_already_logged_does_not_relogin(self, service):
@@ -429,7 +423,6 @@ class TestConnectDisconnectAgent:
         service.agentd.agents.agent_login_to_queue.side_effect = AgentdClientError(
             ALREADY_IN_QUEUE
         )
-
         # No exception: the target state is already reached.
         service.connect_agent("support", 3, "sup-uuid", "t1")
 

@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 # Copyright 2021 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
 from xivo_dao.alchemy.queue_log import QueueLog
 
 
-class Services(object):
+class Services:
     def __init__(self, dao, publisher):
         self._dao = dao
         self._publisher = publisher

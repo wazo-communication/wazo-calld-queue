@@ -349,9 +349,7 @@ class TestGetAgentsStatus:
 
     def test_result_is_cached(self, handler):
         handler.confd.agents.list.return_value = {
-            "items": [
-                {"id": 1, "firstname": "A", "lastname": "B", "number": "1001"}
-            ]
+            "items": [{"id": 1, "firstname": "A", "lastname": "B", "number": "1001"}]
         }
         handler.agentd.agents.get_agent_statuses.return_value = []
 
@@ -859,7 +857,9 @@ class TestBootstrapTimestamps:
         }
         return handler._agents[TENANT][5]
 
-    def test_member_added_backfills_logged_at_after_bootstrap(self, handler, frozen_now):
+    def test_member_added_backfills_logged_at_after_bootstrap(
+        self, handler, frozen_now
+    ):
         self._bootstrapped_agent(handler, ["support"])
 
         handler._queue_member_added(_member_added_event("support"))
@@ -868,7 +868,9 @@ class TestBootstrapTimestamps:
         assert agent["queues"] == ["support"]
         assert agent["logged_at"] == frozen_now.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
-    def test_member_pause_backfills_paused_at_after_bootstrap(self, handler, frozen_now):
+    def test_member_pause_backfills_paused_at_after_bootstrap(
+        self, handler, frozen_now
+    ):
         self._bootstrapped_agent(handler, ["support"], paused_queues=["support"])
 
         handler._queue_member_pause(_member_pause_event("support", paused="1"))
@@ -971,9 +973,7 @@ class TestBuildAgentState:
         assert state["is_paused"] is True
 
     def test_paused_without_membership_stays_consistent(self):
-        state = bus_consume._build_agent_state(
-            1, "1001", "John Doe", [], ["support"]
-        )
+        state = bus_consume._build_agent_state(1, "1001", "John Doe", [], ["support"])
         assert state["queues"] == []
         assert state["paused_queues"] == []
         assert state["is_paused"] is False
@@ -1089,9 +1089,7 @@ class TestThreadSafety:
             start.wait()
             try:
                 for i in range(iterations):
-                    handler._agents_status(
-                        self._member_added_event(100 + i), TENANT
-                    )
+                    handler._agents_status(self._member_added_event(100 + i), TENANT)
             except Exception as exc:  # pragma: no cover - failure path
                 errors.append(("writer", exc))
 
@@ -1159,9 +1157,9 @@ class TestThreadSafety:
             # thread attempt its (lock-guarded) call and assert it cannot finish
             # while we still hold the lock.
             entered.set()
-            assert not other_done.wait(timeout=0.2), (
-                "a second thread mutated state while get_agents_status held the lock"
-            )
+            assert not other_done.wait(
+                timeout=0.2
+            ), "a second thread mutated state while get_agents_status held the lock"
             return {"items": []}
 
         handler.confd.agents.list.side_effect = slow_list
@@ -1241,9 +1239,7 @@ class TestQueueMemberAgentConfdEvents:
         self._seed(handler, 21, configured=["support-88511897"])
         handler.confd.agents.get.return_value = _confd_agent(21, [])
 
-        handler._queue_member_agent_dissociated(
-            {"queue_id": 1, "agent_id": 21}
-        )
+        handler._queue_member_agent_dissociated({"queue_id": 1, "agent_id": 21})
 
         agent = handler._agents[TENANT][21]
         assert agent["configured_queues"] == []
@@ -1319,9 +1315,7 @@ class TestQueueMemberAgentConfdEvents:
         state = self._seed(
             handler, 7, configured=["support", "test"], queues=["support", "test"]
         )
-        state.update(
-            logged_at="2026-06-17T12:00:00.000000", is_talking=True
-        )
+        state.update(logged_at="2026-06-17T12:00:00.000000", is_talking=True)
         handler.confd.agents.get.return_value = _confd_agent(7, ["support"])
 
         handler._queue_member_agent_dissociated({"queue_id": 3, "agent_id": 7})
