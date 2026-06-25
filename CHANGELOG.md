@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-06-25
+
+### Added
+- **Connect auto-login** — `PUT /queues/{queue_name}/connect` now handles an
+  agent with **no active `wazo-agentd` session**: instead of failing, the agent
+  is logged in on its own line (resolved from confd) and joined to **only** the
+  selected queue. A `400` is now returned solely when the agent has **no line**
+  to log in on.
+- **WDA connectivity pre-check on connect** — before connecting, the agent's
+  application (WDA) must be reachable (its device must be registered). If the
+  device is `Unavailable` (websocket KO), the request is rejected with
+  **`409` (`agent-wda-not-connected`)** so the supervisor can be told to have
+  the agent reconnect first. This also catches an agent that still holds an
+  agentd session while its WDA has dropped. Checked via AMI `ExtensionState` on
+  the agent's own extension.
+- New `amid.action.ExtensionState.create` ACL on the `wazo-calld` service token
+  (`etc/wazo-auth-keys/conf.d/call_queue.yml`), required by the WDA pre-check.
+  Re-run `wazo-auth-keys service update` and restart `wazo-calld` after
+  upgrading.
+
+### Fixed
+- **`is_offline` now tracks real device/WDA reachability.** It is recomputed on
+  every `QueueMemberStatus` event (`Status 5` / Unavailable → `is_offline:
+  true`, reachable statuses → `false`), so an agent still logged into a queue
+  whose WDA has disconnected is correctly reported offline. Previously
+  `is_offline` could stay `false` for a disconnected device.
+
+### Internal
+- Added a **code-quality toolchain**: `pre-commit` orchestrating `black`,
+  `isort`, `flake8`, `pyupgrade`, `mypy` and the Wazo copyright check
+  (`pyproject.toml`, `.pre-commit-config.yaml`), a `tox -e linters` target, and
+  a **GitHub Actions CI** running the linters and `pytest` on every PR. The
+  whole codebase was formatted to one consistent style (double-quoted strings).
+- Documented an upstream `wazo-agentd` gap
+  (`docs/ISSUE-agentd-fresh-login-missing-per-queue-event.md`): a full agentd
+  login emits no per-queue `UserAgentQueueLoggedInEvent`, so a standard WDA's
+  queue list only refreshes after a reload.
+
 ## [2.5.0] - 2026-06-24
 
 ### Added
@@ -177,6 +215,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release: Queue REST API and bus events for Asterisk-based queue management.
 
+[2.6.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.3.1...v2.4.0
