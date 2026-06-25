@@ -32,6 +32,32 @@ wazo-plugind-cli -c "install git https://github.com/wazo-communication/wazo-call
 
 Nécessite Wazo 26.06 ou supérieure.
 
+## Développement
+
+### Tests
+
+```bash
+pip install -r requirements-test.txt
+pytest tests/
+```
+
+### Qualité du code
+
+Le projet utilise `pre-commit` pour orchestrer `black`, `isort`, `flake8`,
+`pyupgrade`, `mypy` et la vérification d'en-tête de copyright Wazo. La
+configuration vit dans `pyproject.toml` et `.pre-commit-config.yaml` (alignée
+sur l'upstream `wazo-calld`, à un réglage près : on normalise toutes les
+chaînes en guillemets doubles).
+
+```bash
+pip install pre-commit
+pre-commit install          # exécute les linters à chaque commit (optionnel)
+pre-commit run --all-files  # lance tout le pipeline manuellement
+```
+
+Avec `tox` : `tox -e linters` (qualité) et `tox` (tests). La CI GitHub Actions
+(`.github/workflows/ci.yml`) rejoue les deux sur chaque PR.
+
 ## Auteurs
 
 - Sylvain Boily

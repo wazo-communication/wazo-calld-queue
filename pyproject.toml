@@ -1,0 +1,35 @@
+[tool.black]
+# Normalise everything to double quotes for one consistent style across the
+# repo (the majority of the code already used double quotes). This is the one
+# setting that intentionally diverges from upstream wazo-calld, which keeps
+# skip-string-normalization; here we prefer full internal consistency.
+target-version = ["py311"]
+
+[tool.flake8]
+show-source = true
+max-line-length = 99
+application-import-names = ["wazo_calld_queue", "wazo_call_logd_queue"]
+ignore = [
+  "E203", # whitespace before ':'
+  "E501", # line too long (handled by black)
+  "W503", # line break before binary operator
+]
+exclude = [
+  ".tox",
+  ".eggs",
+  ".venv",
+  ".venv-test",
+]
+
+[tool.isort]
+profile = "black"
+py_version = 311
+
+[tool.mypy]
+python_version = "3.11"
+show_error_codes = true
+check_untyped_defs = true
+warn_unused_configs = true
+ignore_missing_imports = true
+explicit_package_bases = true
+files = ["wazo_calld_queue", "wazo_call_logd_queue"]
