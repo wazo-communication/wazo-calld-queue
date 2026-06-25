@@ -9,3 +9,5 @@ wazo-calld:
     - 'amid.action.queuepause.create'
     - 'agentd.agents.read'
     - 'agentd.agents.by-id.*.read'
+    - 'agentd.agents.*.queues.*.login.update'
+    - 'agentd.agents.*.queues.*.logoff.update'

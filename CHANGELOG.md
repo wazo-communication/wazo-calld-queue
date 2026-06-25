@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-06-24
+
+### Added
+- Per-queue agent **connect** / **disconnect** for supervisors:
+  `PUT /queues/{queue_name}/connect` and `PUT /queues/{queue_name}/disconnect`
+  (body `{"agent_id": <int>}`, `204` on success). The endpoint authorizes the
+  caller server-side — the token's user must be an agent that is itself a member
+  of the target queue (confd) — then delegates to `wazo-agentd`
+  (`agent_login_to_queue` / `agent_logoff_from_queue`). No AMI action, no
+  in-memory state mutation and no new bus event: the change propagates through
+  the existing `QueueMemberAdded` / `QueueMemberRemoved` events and the
+  `queue_agents_status` payload. `ALREADY_IN_QUEUE` / `NOT_IN_QUEUE` from agentd
+  are treated as idempotent success (`204`); a missing agent session yields
+  `400`, an unknown agent/queue `404`, an unauthorized supervisor `403`, and any
+  other agentd error `502`. Fixes #3.
+- Two `agentd.agents.*.queues.*.{login,logoff}.update` ACL on the wazo-calld
+  service token (`etc/wazo-auth-keys/conf.d/call_queue.yml`).
+
 ## [2.4.1] - 2026-06-23
 
 ### Fixed
@@ -159,6 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release: Queue REST API and bus events for Asterisk-based queue management.
 
+[2.5.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.4.1...v2.5.0
+[2.4.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/wazo-communication/wazo-calld-queue/compare/v2.2.0...v2.3.0

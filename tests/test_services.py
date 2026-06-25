@@ -5,6 +5,21 @@ from unittest.mock import Mock
 
 import pytest
 
+from wazo_agentd_client.error import (
+    AgentdClientError,
+    ALREADY_IN_QUEUE,
+    NOT_IN_QUEUE,
+    NOT_LOGGED,
+    NO_SUCH_AGENT,
+    NO_SUCH_QUEUE,
+)
+
+from wazo_calld_queue.exceptions import (
+    AgentdUpstreamError,
+    AgentNotLogged,
+    NoSuchAgentOrQueue,
+    SupervisorNotInQueue,
+)
 from wazo_calld_queue.services import QueueService
 
 
@@ -164,3 +179,129 @@ class TestStatsDelegation:
 
         service.publisher.get_agents_status.assert_called_once_with("tenant-1")
         assert result is service.publisher.get_agents_status.return_value
+
+
+class TestConnectDisconnectAgent:
+    """Per-queue connect/disconnect: authorize the supervisor against the
+    target queue (confd), then delegate to agentd."""
+
+    def _authorize_supervisor_for(self, service, queue_name="support", queue_id=42):
+        service.confd.users.get.return_value = {"agent": {"id": 7}}
+        service.confd.agents.get.return_value = {
+            "queues": [{"id": queue_id, "name": queue_name}]
+        }
+
+    def test_connect_authorized_delegates_to_agentd(self, service):
+        self._authorize_supervisor_for(service)
+
+        service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.confd.users.get.assert_called_once_with(
+            "sup-uuid", tenant_uuid="t1"
+        )
+        service.confd.agents.get.assert_called_once_with(7, tenant_uuid="t1")
+        service.agentd.agents.agent_login_to_queue.assert_called_once_with(
+            3, 42, tenant_uuid="t1"
+        )
+
+    def test_disconnect_authorized_delegates_to_agentd(self, service):
+        self._authorize_supervisor_for(service)
+
+        service.disconnect_agent("support", 3, "sup-uuid", "t1")
+
+        service.agentd.agents.agent_logoff_from_queue.assert_called_once_with(
+            3, 42, tenant_uuid="t1"
+        )
+
+    def test_authorization_is_scoped_to_request_tenant(self, service):
+        # The supervisor/agent lookups and the agentd action must all carry the
+        # request tenant, so a supervisor cannot reach another tenant's roster.
+        self._authorize_supervisor_for(service)
+
+        service.connect_agent("support", 3, "sup-uuid", "tenant-b")
+
+        service.confd.users.get.assert_called_once_with(
+            "sup-uuid", tenant_uuid="tenant-b"
+        )
+        service.confd.agents.get.assert_called_once_with(7, tenant_uuid="tenant-b")
+        service.agentd.agents.agent_login_to_queue.assert_called_once_with(
+            3, 42, tenant_uuid="tenant-b"
+        )
+
+    def test_supervisor_without_agent_is_rejected(self, service):
+        service.confd.users.get.return_value = {"agent": None}
+
+        with pytest.raises(SupervisorNotInQueue):
+            service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.agentd.agents.agent_login_to_queue.assert_not_called()
+
+    def test_supervisor_not_in_target_queue_is_rejected(self, service):
+        service.confd.users.get.return_value = {"agent": {"id": 7}}
+        service.confd.agents.get.return_value = {
+            "queues": [{"id": 99, "name": "sales"}]
+        }
+
+        with pytest.raises(SupervisorNotInQueue):
+            service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        service.agentd.agents.agent_login_to_queue.assert_not_called()
+
+    def test_connect_agent_not_logged_raises_400(self, service):
+        self._authorize_supervisor_for(service)
+        service.agentd.agents.agent_login_to_queue.side_effect = AgentdClientError(
+            NOT_LOGGED
+        )
+
+        with pytest.raises(AgentNotLogged) as exc:
+            service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        assert exc.value.status_code == 400
+
+    def test_no_such_queue_raises_404(self, service):
+        self._authorize_supervisor_for(service)
+        service.agentd.agents.agent_login_to_queue.side_effect = AgentdClientError(
+            NO_SUCH_QUEUE
+        )
+
+        with pytest.raises(NoSuchAgentOrQueue) as exc:
+            service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        assert exc.value.status_code == 404
+
+    def test_no_such_agent_raises_404(self, service):
+        self._authorize_supervisor_for(service)
+        service.agentd.agents.agent_logoff_from_queue.side_effect = AgentdClientError(
+            NO_SUCH_AGENT
+        )
+
+        with pytest.raises(NoSuchAgentOrQueue):
+            service.disconnect_agent("support", 3, "sup-uuid", "t1")
+
+    def test_connect_already_in_queue_is_idempotent(self, service):
+        self._authorize_supervisor_for(service)
+        service.agentd.agents.agent_login_to_queue.side_effect = AgentdClientError(
+            ALREADY_IN_QUEUE
+        )
+
+        # No exception: the target state is already reached.
+        service.connect_agent("support", 3, "sup-uuid", "t1")
+
+    def test_disconnect_not_in_queue_is_idempotent(self, service):
+        self._authorize_supervisor_for(service)
+        service.agentd.agents.agent_logoff_from_queue.side_effect = AgentdClientError(
+            NOT_IN_QUEUE
+        )
+
+        service.disconnect_agent("support", 3, "sup-uuid", "t1")
+
+    def test_unknown_agentd_error_raises_502(self, service):
+        self._authorize_supervisor_for(service)
+        service.agentd.agents.agent_login_to_queue.side_effect = AgentdClientError(
+            "invalid token or unauthorized"
+        )
+
+        with pytest.raises(AgentdUpstreamError) as exc:
+            service.connect_agent("support", 3, "sup-uuid", "t1")
+
+        assert exc.value.status_code == 502

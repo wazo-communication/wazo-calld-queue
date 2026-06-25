@@ -1,5 +1,25 @@
-# Copyright 2018-2023 The Wazo Authors  (see the AUTHORS file)
+# Copyright 2018-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
+
+import logging
+
+from wazo_agentd_client.error import (
+    AgentdClientError,
+    ALREADY_IN_QUEUE,
+    NOT_IN_QUEUE,
+    NOT_LOGGED,
+    NO_SUCH_AGENT,
+    NO_SUCH_QUEUE,
+)
+
+from .exceptions import (
+    AgentdUpstreamError,
+    AgentNotLogged,
+    NoSuchAgentOrQueue,
+    SupervisorNotInQueue,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class QueueService(object):
@@ -52,6 +72,66 @@ class QueueService(object):
             "Reason": params.get("reason"),
         }
         return self.amid.action("queuepause", pause_member)
+
+    def connect_agent(self, queue_name, agent_id, supervisor_uuid, tenant_uuid):
+        queue_id = self._authorize_supervisor(
+            supervisor_uuid, queue_name, tenant_uuid
+        )
+        self._delegate(
+            self.agentd.agents.agent_login_to_queue, agent_id, queue_id, tenant_uuid
+        )
+        logger.info(
+            "supervisor %s connected agent %s to queue %s (id %s, tenant %s)",
+            supervisor_uuid,
+            agent_id,
+            queue_name,
+            queue_id,
+            tenant_uuid,
+        )
+
+    def disconnect_agent(self, queue_name, agent_id, supervisor_uuid, tenant_uuid):
+        queue_id = self._authorize_supervisor(
+            supervisor_uuid, queue_name, tenant_uuid
+        )
+        self._delegate(
+            self.agentd.agents.agent_logoff_from_queue,
+            agent_id,
+            queue_id,
+            tenant_uuid,
+        )
+        logger.info(
+            "supervisor %s disconnected agent %s from queue %s (id %s, tenant %s)",
+            supervisor_uuid,
+            agent_id,
+            queue_name,
+            queue_id,
+            tenant_uuid,
+        )
+
+    def _authorize_supervisor(self, supervisor_uuid, queue_name, tenant_uuid):
+        """Return the target queue_id iff the supervisor is a member of it."""
+        user = self.confd.users.get(supervisor_uuid, tenant_uuid=tenant_uuid)
+        agent = user.get("agent")
+        if not agent:
+            raise SupervisorNotInQueue(queue_name)
+        supervisor_agent = self.confd.agents.get(agent["id"], tenant_uuid=tenant_uuid)
+        for queue in supervisor_agent.get("queues") or []:
+            if queue.get("name") == queue_name:
+                return queue["id"]
+        raise SupervisorNotInQueue(queue_name)
+
+    def _delegate(self, action, agent_id, queue_id, tenant_uuid):
+        try:
+            action(agent_id, queue_id, tenant_uuid=tenant_uuid)
+        except AgentdClientError as e:
+            code = getattr(e, "error", None)
+            if code == NOT_LOGGED:
+                raise AgentNotLogged()
+            if code in (NO_SUCH_QUEUE, NO_SUCH_AGENT):
+                raise NoSuchAgentOrQueue()
+            if code in (ALREADY_IN_QUEUE, NOT_IN_QUEUE):
+                return  # PUT is idempotent: the target state is reached
+            raise AgentdUpstreamError(code)
 
     def livestats(self, queue_name):
         return self.publisher.get_stats(queue_name)

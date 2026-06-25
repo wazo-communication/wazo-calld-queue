@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-# Copyright 2017 The Wazo Authors  (see the AUTHORS file)
+# Copyright 2017-2026 The Wazo Authors  (see the AUTHORS file)
 # SPDX-License-Identifier: GPL-3.0+
 
 
 from flask import request
 from xivo.tenant_flask_helpers import Tenant
 
-from wazo_calld.auth import required_acl
+from wazo_calld.auth import get_token_user_uuid_from_request, required_acl
 from wazo_calld.http import AuthResource
 
 from .schema import (
     intercept_schema,
+    queue_agent_action_schema,
     queue_list_schema,
     queue_schema,
     queue_member_schema,
@@ -98,6 +99,38 @@ class QueueAgentsStatusResource(AuthResource):
         result = self._queues_service.agents_status(tenant.uuid)
 
         return result, 200
+
+
+class QueueConnectAgentResource(AuthResource):
+    def __init__(self, queues_service):
+        self._queues_service = queues_service
+
+    @required_acl("calld.queues.{queue_name}.connect.update")
+    def put(self, queue_name):
+        body = queue_agent_action_schema.load(request.get_json(force=True))
+        tenant = Tenant.autodetect()
+        supervisor_uuid = get_token_user_uuid_from_request()
+        self._queues_service.connect_agent(
+            queue_name, body["agent_id"], supervisor_uuid, tenant.uuid
+        )
+
+        return "", 204
+
+
+class QueueDisconnectAgentResource(AuthResource):
+    def __init__(self, queues_service):
+        self._queues_service = queues_service
+
+    @required_acl("calld.queues.{queue_name}.disconnect.update")
+    def put(self, queue_name):
+        body = queue_agent_action_schema.load(request.get_json(force=True))
+        tenant = Tenant.autodetect()
+        supervisor_uuid = get_token_user_uuid_from_request()
+        self._queues_service.disconnect_agent(
+            queue_name, body["agent_id"], supervisor_uuid, tenant.uuid
+        )
+
+        return "", 204
 
 
 class InterceptResource(AuthResource):

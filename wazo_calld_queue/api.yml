@@ -103,6 +103,62 @@ paths:
             $ref: '#/definitions/QueuePauseMember'
         '503':
           $ref: '#/responses/AnotherServiceUnavailable'
+  /queues/{queue_name}/connect:
+    put:
+      summary: Connect an agent to a queue (supervisor action)
+      description: >-
+        **Required ACL:** `calld.queues.{queue_name}.connect.update`
+
+
+        Connect the targeted agent to the queue. The caller (token user) must be
+        an agent that is itself a member of the target queue; otherwise the
+        request is rejected. Delegated to `wazo-agentd`; the change is reflected
+        through the existing `queue_agents_status` event (no dedicated event).
+        Already-connected agents return `204` (idempotent).
+      parameters:
+        - $ref: '#/parameters/QueueName'
+        - $ref: '#/parameters/QueueAgentAction'
+      tags:
+      - queues
+      responses:
+        '204':
+          description: Agent has been connected to the queue
+        '400':
+          description: The targeted agent has no active session (must log in first)
+        '403':
+          description: The supervisor is not a member of this queue
+        '404':
+          description: No such agent or queue
+        '503':
+          $ref: '#/responses/AnotherServiceUnavailable'
+  /queues/{queue_name}/disconnect:
+    put:
+      summary: Disconnect an agent from a queue (supervisor action)
+      description: >-
+        **Required ACL:** `calld.queues.{queue_name}.disconnect.update`
+
+
+        Disconnect the targeted agent from the queue. The caller (token user)
+        must be an agent that is itself a member of the target queue; otherwise
+        the request is rejected. Delegated to `wazo-agentd`; the change is
+        reflected through the existing `queue_agents_status` event (no dedicated
+        event). Already-disconnected agents return `204` (idempotent).
+      parameters:
+        - $ref: '#/parameters/QueueName'
+        - $ref: '#/parameters/QueueAgentAction'
+      tags:
+      - queues
+      responses:
+        '204':
+          description: Agent has been disconnected from the queue
+        '400':
+          description: The targeted agent has no active session
+        '403':
+          description: The supervisor is not a member of this queue
+        '404':
+          description: No such agent or queue
+        '503':
+          $ref: '#/responses/AnotherServiceUnavailable'
   /queues/intercept/{queue_name}:
     post:
       summary: Intercept call in queue waiting list
@@ -269,6 +325,13 @@ definitions:
       reason:
         description: Paused reason
         type: string
+  QueueAgentAction:
+    type: object
+    properties:
+      agent_id:
+        description: Identifier of the agent to connect/disconnect
+        type: integer
+        required: true
   InterceptCall:
     type: object
     properties:
@@ -308,6 +371,13 @@ parameters:
     required: true
     schema:
       $ref: '#/definitions/QueuePauseMember'
+  QueueAgentAction:
+    name: body
+    in: body
+    description: The agent to connect/disconnect
+    required: true
+    schema:
+      $ref: '#/definitions/QueueAgentAction'
   Intercept:
     name: body
     in: body
