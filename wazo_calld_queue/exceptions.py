@@ -23,6 +23,16 @@ class AgentNotLogged(APIException):
         )
 
 
+class AgentHasNoLine(APIException):
+    def __init__(self, agent_id):
+        super().__init__(
+            400,
+            'Agent has no line to log in on',
+            'agent-has-no-line',
+            details={'agent_id': agent_id},
+        )
+
+
 class NoSuchAgentOrQueue(APIException):
     def __init__(self):
         super().__init__(404, 'No such agent or queue', 'no-such-agent-or-queue')

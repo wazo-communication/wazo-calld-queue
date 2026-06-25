@@ -1,6 +1,6 @@
 name: wazo-calld-queue
 namespace: wazo
-version: 2.5.0
+version: 2.6.0
 author: Sylvain Boily & Mathias WOLFF
 display_name: Queue API and events
 min_wazo_version: 26.06
