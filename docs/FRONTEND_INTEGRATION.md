@@ -114,6 +114,7 @@ Error codes:
 | `400` | The targeted agent has no line to log in on (`connect`), or no active session (`disconnect`). |
 | `403` | The caller is not a member of `{queue_name}` (not allowed to supervise it). |
 | `404` | No such agent or queue. |
+| `409` | (`connect`) The agent's application (WDA) is not connected — its device is unavailable. `error_id: agent-wda-not-connected`. Tell the supervisor the agent must reconnect WDA first. Also fires when the agent still has an agentd session but its WDA dropped (the same condition as `is_offline: true`). |
 | `502` | Unexpected error from `wazo-agentd`. |
 
 ---
